@@ -10,6 +10,7 @@ class AppColors {
   static const text = Color(0xFFE6EDF3);
   static const muted = Color(0xFF8B96A5);
   static const accent = Color(0xFF7C9CFF);
+  static const warning = Color(0xFFFBBF24);
 
   // JSON syntax colors
   static const jKey = Color(0xFF9CDCFE);

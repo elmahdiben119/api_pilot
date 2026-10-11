@@ -3,31 +3,12 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
+import '../widgets/dialogs.dart';
 import '../widgets/kv_editor.dart';
 
 class EnvironmentsScreen extends StatelessWidget {
   final AppStore store;
   const EnvironmentsScreen({super.key, required this.store});
-
-  Future<String?> _prompt(BuildContext context, String title, {String initial = ''}) {
-    final c = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Name', hintText: 'Production, Staging, Local…'),
-          onSubmitted: (t) => Navigator.pop(ctx, t),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('OK')),
-        ],
-      ),
-    );
-  }
 
   void _settings(BuildContext context) {
     showModalBottomSheet<void>(
@@ -35,7 +16,7 @@ class EnvironmentsScreen extends StatelessWidget {
       builder: (ctx) => ListenableBuilder(
         listenable: store,
         builder: (ctx, _) => SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Settings', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
@@ -48,6 +29,17 @@ class EnvironmentsScreen extends StatelessWidget {
                 divisions: 23,
                 label: '${store.timeoutSeconds}s',
                 onChanged: (v) => store.setTimeout(v.round()),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Keep history'),
+                subtitle: const Text(
+                  'Saves each sent request and its response on this device (encrypted). '
+                  'Turning it off keeps existing entries until you clear them.',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: store.keepHistory,
+                onChanged: store.setKeepHistory,
               ),
               const SizedBox(height: 8),
               const Text('Dynamic variables', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -83,7 +75,7 @@ class EnvironmentsScreen extends StatelessWidget {
         ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: () async {
-            final n = await _prompt(context, 'New environment');
+            final n = await promptText(context, title: 'New environment', hint: 'Production, Staging, Local…');
             if (n == null || n.trim().isEmpty || !context.mounted) return;
             final e = store.addEnvironment(n.trim());
             Navigator.push(

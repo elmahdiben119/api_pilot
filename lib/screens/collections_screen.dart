@@ -1,12 +1,13 @@
 import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../importer.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
+import '../widgets/dialogs.dart';
 
 class MethodBadge extends StatelessWidget {
   final String method;
@@ -36,56 +37,65 @@ class CollectionsScreen extends StatelessWidget {
       ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  Future<String?> _prompt(BuildContext context, String title, {String initial = ''}) {
-    final c = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Name'),
-          onSubmitted: (t) => Navigator.pop(ctx, t),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('OK')),
-        ],
-      ),
-    );
+  void _import(BuildContext context, String text) {
+    try {
+      _toast(context, store.importJson(text).summary);
+    } on FormatException catch (e) {
+      _toast(context, e.message);
+    }
   }
 
-  Future<bool> _confirm(BuildContext context, String text) async =>
-      await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          content: Text(text),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
-          ],
-        ),
-      ) ??
-      false;
-
-  Future<void> _import(BuildContext context) async {
+  Future<void> _importClipboard(BuildContext context) async {
     final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
     if (!context.mounted) return;
     if (text.trim().isEmpty) {
       _toast(context, 'Copy a Postman collection/environment or API Pilot export JSON first');
       return;
     }
+    _import(context, text);
+  }
+
+  Future<void> _importFile(BuildContext context) async {
     try {
-      final r = Importer.parse(text);
-      store.collections.addAll(r.collections);
-      store.environments.addAll(r.environments);
-      store.activeEnvId ??= r.environments.isNotEmpty ? r.environments.first.id : null;
-      store.changed();
-      _toast(context, r.summary);
+      final file = await FilePicker.pickFile(dialogTitle: 'Import collection or environment');
+      if (file == null) return;
+      final size = await file.length() ?? 0;
+      if (size > _maxImportBytes) throw const FormatException('File is too large (max 20 MB)');
+      final text = utf8.decode(await file.readAsBytes(), allowMalformed: true);
+      if (context.mounted) _import(context, text);
     } on FormatException catch (e) {
-      _toast(context, e.message);
+      if (context.mounted) _toast(context, e.message);
+    } catch (e) {
+      if (context.mounted) _toast(context, 'Could not read the file: $e');
     }
+  }
+
+  static const _maxImportBytes = 20 * 1024 * 1024;
+
+  Future<void> _exportFile(BuildContext context, String json, String fileName) async {
+    if (!await confirm(context, _secretsWarning, action: 'Export')) return;
+    try {
+      final uri = await FilePicker.saveFile(
+        fileName: fileName,
+        bytes: utf8.encode(json),
+        mimeType: 'application/json',
+        dialogTitle: 'Export',
+      );
+      if (uri != null && context.mounted) _toast(context, 'Exported $fileName');
+    } catch (e) {
+      if (context.mounted) _toast(context, 'Export failed: $e');
+    }
+  }
+
+  static const _secretsWarning = 'The export contains everything saved in your requests and environments, '
+      'including tokens, passwords and API keys. Only share it with people you trust.';
+
+  static String _collectionJson(Collection c) => const JsonEncoder.withIndent('  ')
+      .convert({'apiPilot': 1, 'collections': [c.toJson()], 'environments': []});
+
+  static String _fileSafe(String name) {
+    final s = name.trim().replaceAll(RegExp(r'[^\w\- ]'), '').replaceAll(' ', '-');
+    return s.isEmpty ? 'collection' : s;
   }
 
   @override
@@ -97,23 +107,37 @@ class CollectionsScreen extends StatelessWidget {
           title: const Text('Collections'),
           actions: [
             PopupMenuButton<String>(
-              onSelected: (k) {
+              onSelected: (k) async {
                 switch (k) {
+                  case 'import-file':
+                    _importFile(context);
                   case 'import':
-                    _import(context);
+                    _importClipboard(context);
+                  case 'export-file':
+                    _exportFile(context, store.exportAll(), 'api-pilot-export.json');
                   case 'export':
-                    Clipboard.setData(ClipboardData(text: store.exportAll()));
-                    _toast(context, 'All collections & environments copied as JSON');
+                    if (!await confirm(context, _secretsWarning, action: 'Copy')) return;
+                    await Clipboard.setData(ClipboardData(text: store.exportAll()));
+                    if (context.mounted) _toast(context, 'All collections & environments copied as JSON');
                 }
               },
               itemBuilder: (_) => const [
                 PopupMenuItem(
-                  value: 'import',
+                  value: 'import-file',
                   child: ListTile(
-                    leading: Icon(Icons.content_paste_go),
-                    title: Text('Import from clipboard'),
+                    leading: Icon(Icons.file_open_outlined),
+                    title: Text('Import from file'),
                     subtitle: Text('Postman v2 / environment / API Pilot'),
                   ),
+                ),
+                PopupMenuItem(
+                  value: 'import',
+                  child: ListTile(leading: Icon(Icons.content_paste_go), title: Text('Import from clipboard')),
+                ),
+                PopupMenuDivider(),
+                PopupMenuItem(
+                  value: 'export-file',
+                  child: ListTile(leading: Icon(Icons.save_alt), title: Text('Export all to file')),
                 ),
                 PopupMenuItem(
                   value: 'export',
@@ -125,7 +149,7 @@ class CollectionsScreen extends StatelessWidget {
         ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: () async {
-            final n = await _prompt(context, 'New collection');
+            final n = await promptText(context, title: 'New collection');
             if (n != null && n.trim().isNotEmpty) store.addCollection(n.trim());
           },
           icon: const Icon(Icons.create_new_folder_outlined),
@@ -169,18 +193,19 @@ class CollectionsScreen extends StatelessWidget {
                 store.openRequest(r, collectionId: c.id);
                 onOpen();
               case 'rename':
-                final n = await _prompt(context, 'Rename collection', initial: c.name);
+                final n = await promptText(context, title: 'Rename collection', initial: c.name);
                 if (n != null && n.trim().isNotEmpty) {
                   c.name = n.trim();
                   store.changed();
                 }
               case 'export':
-                await Clipboard.setData(ClipboardData(
-                    text: const JsonEncoder.withIndent('  ')
-                        .convert({'apiPilot': 1, 'collections': [c.toJson()], 'environments': []})));
+                if (!await confirm(context, _secretsWarning, action: 'Copy')) return;
+                await Clipboard.setData(ClipboardData(text: _collectionJson(c)));
                 if (context.mounted) _toast(context, 'Collection copied as JSON');
+              case 'export-file':
+                if (context.mounted) await _exportFile(context, _collectionJson(c), '${_fileSafe(c.name)}.json');
               case 'delete':
-                if (await _confirm(context, 'Delete "${c.name}" and its ${c.requests.length} requests?')) {
+                if (await confirm(context, 'Delete "${c.name}" and its ${c.requests.length} requests?')) {
                   store.deleteCollection(c);
                 }
             }
@@ -189,6 +214,7 @@ class CollectionsScreen extends StatelessWidget {
             PopupMenuItem(value: 'add', child: Text('Add request')),
             PopupMenuItem(value: 'rename', child: Text('Rename')),
             PopupMenuItem(value: 'export', child: Text('Copy as JSON')),
+            PopupMenuItem(value: 'export-file', child: Text('Export to file')),
             PopupMenuItem(value: 'delete', child: Text('Delete')),
           ],
         ),
@@ -205,8 +231,7 @@ class CollectionsScreen extends StatelessWidget {
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             buildDefaultDragHandles: false,
-            onReorder: (from, to) {
-              if (to > from) to--;
+            onReorderItem: (from, to) {
               final item = c.requests.removeAt(from);
               c.requests.insert(to, item);
               store.changed();
@@ -245,14 +270,14 @@ class CollectionsScreen extends StatelessWidget {
               case 'dup':
                 store.duplicateRequest(c, r);
               case 'rename':
-                final n = await _prompt(context, 'Rename request', initial: r.name);
+                final n = await promptText(context, title: 'Rename request', initial: r.name);
                 if (n != null && n.trim().isNotEmpty) {
                   r.name = n.trim();
                   if (store.current.id == r.id) store.current.name = r.name;
                   store.changed();
                 }
               case 'delete':
-                if (await _confirm(context, 'Delete "${r.name}"?')) store.deleteRequest(c, r);
+                if (await confirm(context, 'Delete "${r.name}"?')) store.deleteRequest(c, r);
             }
           },
           itemBuilder: (_) => const [

@@ -10,9 +10,11 @@ API client for Android, built with Flutter. Test REST and GraphQL APIs from your
 - **Auth:** Bearer token, API key (header or query param), Basic
 - **Environments:** `{{variables}}` everywhere (URL, params, headers, auth, body), switch from the app bar, live preview of the resolved URL, warning for undefined variables
 - **Dynamic variables:** `{{$timestamp}}`, `{{$isoTimestamp}}`, `{{$uuid}}`, `{{$randomInt}}`
-- **History:** last 150 requests with responses, searchable, filter by method, swipe to delete
-- **Collections:** save, rename, duplicate, drag to reorder; import Postman v2.0/v2.1 collections and environments from the clipboard; export as JSON
-- **Response viewer:** status/time/size, syntax-highlighted Pretty view, collapsible Tree view, Raw, Headers
+- **History:** last 150 requests with responses, searchable, filter by method, swipe to delete; can be turned off in Settings
+- **Collections:** save, rename, duplicate, drag to reorder; import Postman v2.0/v2.1 collections and environments from a file or the clipboard; export to a file or as JSON
+- **Response viewer:** status/time/size, syntax-highlighted Pretty view, collapsible Tree view, Raw, Headers; image preview and hex view for binary bodies; bodies over 10 MB are truncated
+- **Cancel** a running request with the stop button; redirects never forward credentials to another host
+- **Private by default:** everything is stored encrypted on the device (Android Keystore), nothing is sent anywhere except the requests you make, and Android cloud backup is disabled
 - **JSONPath:** filter any JSON response live — `$..id`, `$.items[?(@.price < 10)].name`, slices, unions, regex `=~ /re/i`, `.length()`. Long-press a node in Tree view to fill in its path.
 - **Request chaining:** save a JSONPath result (e.g. a login token) into the active environment with one tap, then use it as `{{token}}`
 - **GraphQL:** query + variables editor, and a **Schema** browser (introspection) that generates a ready-to-run query with variables for any field
@@ -42,20 +44,40 @@ The repo includes a GitHub Actions workflow (`.github/workflows/build-apk.yml`).
 Push this folder to a GitHub repo (the GitHub mobile app or github.com works), open **Actions → Build APK**,
 and download the `api-pilot-apk` artifact when it finishes. Install it on your phone (allow "install unknown apps").
 
-The release APK is signed with the debug key, which is fine for personal use. For the Play Store, set up your own signing key.
+### Signing
+
+Release builds are signed with the upload key described in `android/key.properties`
+(git-ignored; see [android/key.properties.example](android/key.properties.example)).
+If that file is missing, they fall back to the debug key, which is fine for personal use.
+
+**Back up `android/app/upload-keystore.jks` and `android/key.properties` somewhere safe.**
+If you lose them you can no longer publish updates under the same signing identity.
+
+To sign in GitHub Actions, add two repository secrets:
+
+- `ANDROID_KEYSTORE_BASE64`: the keystore, base64-encoded
+  (`base64 -w0 android/app/upload-keystore.jks` in Git Bash)
+- `ANDROID_KEYSTORE_PASSWORD`: the password from `key.properties`
+
+The workflow then builds a signed APK and an App Bundle (`api-pilot-aab`, the format Google Play wants).
+
+The application ID is `dev.apipilot.api_pilot`.
 
 ## Project layout
 
-```
+```text
 lib/
   main.dart                 app shell + bottom navigation
   models.dart               requests, responses, collections, environments
-  store.dart                state + persistence (shared_preferences)
-  http_service.dart         variable resolution, auth, sending, cURL import/export
+  store.dart                state + persistence
+  storage.dart              encrypted storage (flutter_secure_storage) + migration from shared_preferences
+  http_service.dart         variable resolution, auth, sending (redirects, cancel, size cap), cURL import/export
   jsonpath.dart             JSONPath engine
   graphql_schema.dart       introspection parser + query generator
   importer.dart             Postman / API Pilot import
   screens/                  request, collections, history, environments
-  widgets/                  key/value editor, response viewer, JSON views, schema sheet
-test/widget_test.dart       tests for JSONPath, cURL and Postman import
+  widgets/                  key/value editor, response viewer, JSON views, schema sheet, dialogs
+test/widget_test.dart       JSONPath, cURL and Postman import
+test/http_service_test.dart sending, redirects, cancel, binary detection, persistence and migration
+test/screens_test.dart      widget tests for the tabs, dialogs and response viewer
 ```

@@ -2,15 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'http_service.dart';
+import 'importer.dart';
 import 'models.dart';
+import 'storage.dart';
 
-/// Single source of truth for the app. Persists everything to
-/// SharedPreferences as JSON (debounced).
+/// Single source of truth for the app. Persists everything as JSON
+/// (debounced) in encrypted storage.
 class AppStore extends ChangeNotifier {
+  AppStore({KeyValueStorage? storage, KeyValueStorage? legacy})
+      : _storage = storage ?? const SecureStorage(),
+        _legacy = legacy ?? const PrefsStorage();
+
   static const _key = 'api_pilot_state_v1';
+
+  /// History lives under its own key so it's only re-encoded when it changes.
+  static const _historyKey = 'api_pilot_history_v1';
   static const maxHistory = 150;
 
   List<Collection> collections = [];
@@ -18,6 +26,13 @@ class AppStore extends ChangeNotifier {
   List<HistoryEntry> history = [];
   String? activeEnvId;
   int timeoutSeconds = 30;
+
+  /// When false, sent requests are not recorded in history.
+  bool keepHistory = true;
+
+  /// Set when saved data exists but can't be read. Saving is then disabled
+  /// so the unreadable data isn't overwritten.
+  String? storageError;
 
   ApiRequest current = ApiRequest(url: 'https://jsonplaceholder.typicode.com/posts/1');
 
@@ -30,12 +45,36 @@ class AppStore extends ChangeNotifier {
   /// text controllers.
   int loadVersion = 0;
 
-  SharedPreferences? _prefs;
+  final KeyValueStorage _storage;
+  final KeyValueStorage _legacy;
+  bool _loaded = false;
+  bool _migrateLegacy = false;
   Timer? _saveTimer;
+  bool _historyDirty = false;
+
+  /// Completing it aborts the request in flight.
+  Completer<void>? _abort;
 
   Future<void> load() async {
-    _prefs = await SharedPreferences.getInstance();
-    final raw = _prefs!.getString(_key);
+    String? raw;
+    String? rawHistory;
+    try {
+      raw = await _storage.read(_key);
+      rawHistory = await _storage.read(_historyKey);
+    } catch (e) {
+      debugPrint('Failed to read saved data: $e');
+      storageError = "Saved data couldn't be decrypted, so changes in this session won't be saved.";
+      _seed();
+      notifyListeners();
+      return;
+    }
+    _loaded = true;
+    if (raw == null) {
+      // Versions before 1.1 stored everything unencrypted in SharedPreferences.
+      raw = await _legacy.read(_key);
+      rawHistory = await _legacy.read(_historyKey);
+      _migrateLegacy = raw != null;
+    }
     if (raw == null) {
       _seed();
       notifyListeners();
@@ -49,19 +88,41 @@ class AppStore extends ChangeNotifier {
       environments = (j['environments'] as List? ?? const [])
           .map((e) => Environment.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
-      history = (j['history'] as List? ?? const [])
-          .map((e) => HistoryEntry.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList();
       activeEnvId = j['activeEnvId'] as String?;
       timeoutSeconds = j['timeout'] as int? ?? 30;
+      keepHistory = j['keepHistory'] as bool? ?? true;
       if (j['current'] != null) {
         current = ApiRequest.fromJson(Map<String, dynamic>.from(j['current'] as Map));
       }
       currentCollectionId = j['currentCollectionId'] as String?;
+      if (j['history'] is List && rawHistory == null) {
+        // Older versions kept history inside the main blob: move it out.
+        history = _parseHistory(j['history'] as List);
+        _historyDirty = true;
+      }
     } catch (e) {
-      debugPrint('Failed to load state: $e');
+      await _keepUnreadable(_key, raw, e);
     }
+    if (rawHistory != null) {
+      try {
+        history = _parseHistory(jsonDecode(rawHistory) as List);
+      } catch (e) {
+        await _keepUnreadable(_historyKey, rawHistory, e);
+      }
+    }
+    if (_migrateLegacy) _historyDirty = true;
+    if (_historyDirty) _scheduleSave();
     notifyListeners();
+  }
+
+  static List<HistoryEntry> _parseHistory(List list) =>
+      list.map((e) => HistoryEntry.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+
+  /// Copies data that failed to load to a side key, so the next save can't
+  /// destroy the only copy.
+  Future<void> _keepUnreadable(String key, String raw, Object error) async {
+    debugPrint('Failed to load $key: $error');
+    await _storage.write('${key}_unreadable', raw);
   }
 
   void _seed() {
@@ -105,20 +166,35 @@ class AppStore extends ChangeNotifier {
 
   Future<void> saveNow() async {
     _saveTimer?.cancel();
-    final p = _prefs;
-    if (p == null) return;
-    await p.setString(
-      _key,
-      jsonEncode({
-        'collections': collections.map((e) => e.toJson()).toList(),
-        'environments': environments.map((e) => e.toJson()).toList(),
-        'history': history.map((e) => e.toJson()).toList(),
-        'activeEnvId': activeEnvId,
-        'timeout': timeoutSeconds,
-        'current': current.toJson(),
-        'currentCollectionId': currentCollectionId,
-      }),
-    );
+    if (!_loaded || storageError != null) return;
+    final historyDirty = _historyDirty;
+    _historyDirty = false;
+    try {
+      if (historyDirty) {
+        await _storage.write(_historyKey, jsonEncode(history.map((e) => e.toJson()).toList()));
+      }
+      await _storage.write(
+        _key,
+        jsonEncode({
+          'collections': collections.map((e) => e.toJson()).toList(),
+          'environments': environments.map((e) => e.toJson()).toList(),
+          'activeEnvId': activeEnvId,
+          'timeout': timeoutSeconds,
+          'keepHistory': keepHistory,
+          'current': current.toJson(),
+          'currentCollectionId': currentCollectionId,
+        }),
+      );
+      if (_migrateLegacy) {
+        // Encrypted copy is written: remove the plain-text one.
+        _migrateLegacy = false;
+        await _legacy.delete(_key);
+        await _legacy.delete(_historyKey);
+      }
+    } catch (e) {
+      debugPrint('Failed to save: $e');
+      if (historyDirty) _historyDirty = true;
+    }
   }
 
   /// Call after mutating any model object in place.
@@ -211,14 +287,28 @@ class AppStore extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    // Snapshot now: the user may edit or switch requests while this one runs.
+    final sent = current.copy();
+    final version = loadVersion;
+    final abort = _abort = Completer<void>();
     sending = true;
     notifyListeners();
-    final res = await HttpService.send(prepared, timeout: Duration(seconds: timeoutSeconds));
+    final res = await HttpService.send(prepared, timeout: Duration(seconds: timeoutSeconds), abort: abort.future);
+    _abort = null;
     sending = false;
-    response = res;
-    history.insert(0, HistoryEntry(request: current.copy(), response: res));
-    if (history.length > maxHistory) history.removeRange(maxHistory, history.length);
+    // A response for a request that's no longer open must not replace its view.
+    if (loadVersion == version) response = res;
+    if (keepHistory && res.error != HttpService.cancelledMessage) {
+      history.insert(0, HistoryEntry(request: sent, response: res));
+      if (history.length > maxHistory) history.removeRange(maxHistory, history.length);
+      _historyDirty = true;
+    }
     changed();
+  }
+
+  void cancelSend() {
+    final a = _abort;
+    if (a != null && !a.isCompleted) a.complete();
   }
 
   // -------------------------------------------------------- collections
@@ -273,11 +363,13 @@ class AppStore extends ChangeNotifier {
 
   void clearHistory() {
     history.clear();
+    _historyDirty = true;
     changed();
   }
 
   void deleteHistory(HistoryEntry h) {
     history.remove(h);
+    _historyDirty = true;
     changed();
   }
 
@@ -286,7 +378,23 @@ class AppStore extends ChangeNotifier {
     changed();
   }
 
+  void setKeepHistory(bool keep) {
+    keepHistory = keep;
+    changed();
+  }
+
   // ----------------------------------------------------- import / export
+
+  /// Adds the collections and environments found in [text] (Postman or API
+  /// Pilot JSON). Throws [FormatException] if the text isn't recognized.
+  ImportResult importJson(String text) {
+    final r = Importer.parse(text);
+    collections.addAll(r.collections);
+    environments.addAll(r.environments);
+    activeEnvId ??= r.environments.isNotEmpty ? r.environments.first.id : null;
+    changed();
+    return r;
+  }
 
   String exportAll() => const JsonEncoder.withIndent('  ').convert({
         'apiPilot': 1,
@@ -297,6 +405,7 @@ class AppStore extends ChangeNotifier {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    cancelSend();
     super.dispose();
   }
 }

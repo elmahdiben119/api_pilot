@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -13,10 +14,23 @@ class PreparedRequest {
   final Map<String, String> headers;
   final String? body;
 
-  PreparedRequest(this.method, this.uri, this.headers, this.body);
+  /// Lower-cased names of headers that carry auth secrets besides the
+  /// standard ones (e.g. an API key header). Dropped on cross-origin redirects.
+  final Set<String> credentialHeaders;
+
+  PreparedRequest(this.method, this.uri, this.headers, this.body, {this.credentialHeaders = const {}});
 }
 
 class HttpService {
+  static const maxRedirects = 5;
+
+  /// Response bodies beyond this size are cut off (and marked truncated).
+  static const maxResponseBytes = 10 * 1024 * 1024;
+
+  static const cancelledMessage = 'Request cancelled';
+
+  static const _standardCredentials = {'authorization', 'proxy-authorization', 'cookie'};
+
   static final _varRe = RegExp(r'\{\{\s*([$\w.\-]+)\s*\}\}');
   static final _rand = Random();
 
@@ -71,8 +85,11 @@ class HttpService {
     String s(String x) => subst(x, vars);
     final url = normalizeUrl(s(r.url));
     if (url.isEmpty) throw const FormatException('Enter a URL');
-    final base = Uri.parse(url);
-    if (base.host.isEmpty) throw FormatException('Invalid URL: $url');
+    final base = Uri.tryParse(url);
+    if (base == null || base.host.isEmpty) throw FormatException('Invalid URL: $url');
+    if (base.scheme != 'http' && base.scheme != 'https') {
+      throw FormatException('Unsupported scheme "${base.scheme}": use http or https');
+    }
 
     final query = <String, List<String>>{};
     base.queryParametersAll.forEach((k, v) => query[k] = [...v]);
@@ -87,6 +104,7 @@ class HttpService {
       headers[s(h.key.trim())] = s(h.value);
     }
 
+    final credentials = <String>{};
     switch (r.authType) {
       case AuthType.bearer:
         if (r.bearerToken.trim().isNotEmpty) {
@@ -97,7 +115,9 @@ class HttpService {
           if (r.apiKeyInQuery) {
             query[s(r.apiKeyName.trim())] = [s(r.apiKeyValue)];
           } else {
-            headers[s(r.apiKeyName.trim())] = s(r.apiKeyValue);
+            final name = s(r.apiKeyName.trim());
+            headers[name] = s(r.apiKeyValue);
+            credentials.add(name.toLowerCase());
           }
         }
       case AuthType.basic:
@@ -132,7 +152,7 @@ class HttpService {
     }
 
     final uri = query.isEmpty ? base : base.replace(queryParameters: query);
-    return PreparedRequest(r.method.toUpperCase(), uri, headers, body);
+    return PreparedRequest(r.method.toUpperCase(), uri, headers, body, credentialHeaders: credentials);
   }
 
   static String graphqlBody(String query, String variables) {
@@ -147,37 +167,119 @@ class HttpService {
     return jsonEncode({'query': query, if (vars != null) 'variables': vars});
   }
 
+  /// Sends [p], following up to [maxRedirects] redirects. Credentials are not
+  /// forwarded when a redirect leaves the original origin. Bodies larger than
+  /// [maxBytes] are cut off. Completing [abort] cancels the request.
+  /// [timeout] covers the whole exchange, redirects included.
   static Future<ResponseData> send(PreparedRequest p,
-      {Duration timeout = const Duration(seconds: 30)}) async {
-    final client = http.Client();
+      {Duration timeout = const Duration(seconds: 30),
+      Future<void>? abort,
+      http.Client? client,
+      int maxBytes = maxResponseBytes}) async {
+    final c = client ?? http.Client();
+    final timedOut = Completer<void>();
+    final trigger = abort == null ? timedOut.future : Future.any([timedOut.future, abort]);
     final sw = Stopwatch()..start();
+    Duration left() => timeout - sw.elapsed;
+    var uri = p.uri;
+    var method = p.method;
+    var body = p.body;
+    final headers = Map<String, String>.from(p.headers);
     try {
-      final req = http.Request(p.method, p.uri)..followRedirects = true;
-      req.headers.addAll(p.headers);
-      if (p.body != null && p.body!.isNotEmpty) req.bodyBytes = utf8.encode(p.body!);
-      final streamed = await client.send(req).timeout(timeout);
-      final bytes = await streamed.stream.toBytes().timeout(timeout);
-      sw.stop();
-      return ResponseData(
-        statusCode: streamed.statusCode,
-        reason: streamed.reasonPhrase ?? '',
-        headers: Map<String, String>.from(streamed.headers),
-        body: utf8.decode(bytes, allowMalformed: true),
-        durationMs: sw.elapsedMilliseconds,
-        sizeBytes: bytes.length,
-        finalUrl: p.uri.toString(),
-      );
+      for (var hop = 0;; hop++) {
+        final req = http.AbortableRequest(method, uri, abortTrigger: trigger)..followRedirects = false;
+        req.headers.addAll(headers);
+        if (body != null && body.isNotEmpty) req.bodyBytes = utf8.encode(body);
+        final res = await c.send(req).timeout(left());
+        final next = _redirectTarget(uri, res);
+        if (next != null && hop < maxRedirects) {
+          await res.stream.drain<void>().timeout(left());
+          if (!_sameOrigin(uri, next)) {
+            headers.removeWhere((k, _) =>
+                _standardCredentials.contains(k.toLowerCase()) || p.credentialHeaders.contains(k.toLowerCase()));
+          }
+          final code = res.statusCode;
+          if ((code == 303 && method != 'HEAD') || ((code == 301 || code == 302) && method == 'POST')) {
+            method = 'GET';
+            body = null;
+            headers.removeWhere((k, _) => k.toLowerCase() == 'content-type');
+          }
+          uri = next;
+          continue;
+        }
+        final (bytes, truncated) = await _readCapped(res.stream, maxBytes).timeout(left());
+        sw.stop();
+        final contentType =
+            res.headers.entries.where((e) => e.key.toLowerCase() == 'content-type').firstOrNull?.value;
+        final binary = looksBinary(contentType, bytes);
+        return ResponseData(
+          statusCode: res.statusCode,
+          reason: res.reasonPhrase ?? '',
+          headers: Map<String, String>.from(res.headers),
+          body: binary ? '' : utf8.decode(bytes, allowMalformed: true),
+          bytes: binary ? bytes : null,
+          durationMs: sw.elapsedMilliseconds,
+          sizeBytes: truncated ? (res.contentLength ?? bytes.length) : bytes.length,
+          truncated: truncated,
+          finalUrl: uri.toString(),
+        );
+      }
     } on TimeoutException {
+      timedOut.complete();
       return ResponseData(
           error: 'Request timed out after ${timeout.inSeconds}s',
           durationMs: sw.elapsedMilliseconds,
-          finalUrl: p.uri.toString());
+          finalUrl: uri.toString());
+    } on http.RequestAbortedException {
+      return ResponseData(error: cancelledMessage, durationMs: sw.elapsedMilliseconds, finalUrl: uri.toString());
     } catch (e) {
-      return ResponseData(
-          error: e.toString(), durationMs: sw.elapsedMilliseconds, finalUrl: p.uri.toString());
+      return ResponseData(error: e.toString(), durationMs: sw.elapsedMilliseconds, finalUrl: uri.toString());
     } finally {
-      client.close();
+      if (client == null) c.close();
     }
+  }
+
+  static const _textTypes = ['json', 'xml', 'javascript', 'html', 'x-www-form-urlencoded', 'graphql', 'yaml', 'csv'];
+  static const _binaryTypes = ['octet-stream', 'pdf', 'zip', 'gzip', 'protobuf', 'msgpack', 'font', 'wasm'];
+
+  /// Whether a body should be shown as binary rather than text. Trusts a
+  /// clear Content-Type, otherwise sniffs the first KB for NUL bytes or
+  /// invalid UTF-8.
+  static bool looksBinary(String? contentType, List<int> bytes) {
+    final ct = (contentType ?? '').toLowerCase();
+    if (ct.startsWith('text/') || _textTypes.any(ct.contains)) return false;
+    if (ct.startsWith('image/') || ct.startsWith('audio/') || ct.startsWith('video/') || _binaryTypes.any(ct.contains)) {
+      return true;
+    }
+    final probe = bytes.length > 1024 ? bytes.sublist(0, 1024) : bytes;
+    if (probe.contains(0)) return true;
+    // A multi-byte character cut at the probe's end yields one U+FFFD; real
+    // binary yields many.
+    return '�'.allMatches(utf8.decode(probe, allowMalformed: true)).length > 2;
+  }
+
+  static Uri? _redirectTarget(Uri from, http.BaseResponse res) {
+    if (!const {301, 302, 303, 307, 308}.contains(res.statusCode)) return null;
+    final loc = res.headers.entries.where((e) => e.key.toLowerCase() == 'location').firstOrNull?.value;
+    final ref = loc == null ? null : Uri.tryParse(loc.trim());
+    if (ref == null) return null;
+    final to = from.resolveUri(ref);
+    return to.scheme == 'http' || to.scheme == 'https' ? to : null;
+  }
+
+  static bool _sameOrigin(Uri a, Uri b) => a.scheme == b.scheme && a.host == b.host && a.port == b.port;
+
+  static Future<(Uint8List, bool)> _readCapped(Stream<List<int>> stream, int maxBytes) async {
+    final b = BytesBuilder(copy: false);
+    await for (final chunk in stream) {
+      final room = maxBytes - b.length;
+      if (chunk.length > room) {
+        b.add(chunk.sublist(0, room));
+        return (b.takeBytes(), true);
+      }
+      b.add(chunk);
+    }
+    return (b.takeBytes(), false);
   }
 
   // ---------------------------------------------------------------- cURL

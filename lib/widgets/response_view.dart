@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,7 +8,23 @@ import '../jsonpath.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
+import 'dialogs.dart';
 import 'json_view.dart';
+
+/// Classic 16-bytes-per-line hex dump with an ASCII column.
+String hexDump(List<int> bytes) {
+  final b = StringBuffer();
+  for (var i = 0; i < bytes.length; i += 16) {
+    final row = bytes.sublist(i, i + 16 > bytes.length ? bytes.length : i + 16);
+    b.write(i.toRadixString(16).padLeft(4, '0'));
+    b.write('  ');
+    b.write(row.map((x) => x.toRadixString(16).padLeft(2, '0')).join(' ').padRight(47));
+    b.write('  ');
+    b.write(String.fromCharCodes(row.map((x) => x >= 32 && x < 127 ? x : 46)));
+    if (i + 16 < bytes.length) b.writeln();
+  }
+  return b.toString();
+}
 
 enum _View { pretty, tree, raw, headers }
 
@@ -27,6 +44,11 @@ class _ResponseViewState extends State<ResponseView> {
   bool _isJson = false;
   List<dynamic>? _results;
   String? _pathError;
+
+  /// Bodies larger than this are parsed in a background isolate.
+  static const _isolateThreshold = 256 * 1024;
+  bool _parsing = false;
+  int _parseGen = 0;
 
   @override
   void initState() {
@@ -50,10 +72,31 @@ class _ResponseViewState extends State<ResponseView> {
   }
 
   void _parse() {
-    final j = widget.response.json;
+    final body = widget.response.body;
+    final gen = ++_parseGen;
+    if (body.length < _isolateThreshold) {
+      _parsing = false;
+      _applyJson(ResponseData.decodeJson(body));
+      return;
+    }
+    _parsing = true;
+    _applyJson(null);
+    compute(ResponseData.decodeJson, body).then((j) {
+      // Ignore results for a response that has since been replaced.
+      if (!mounted || gen != _parseGen) return;
+      setState(() {
+        _parsing = false;
+        _applyJson(j);
+      });
+      _runPath();
+    });
+  }
+
+  void _applyJson(dynamic j) {
     _isJson = j != null || widget.response.body.trim() == 'null';
     _json = j;
     if (!_isJson && view == _View.tree) view = _View.pretty;
+    if (widget.response.binary && view == _View.raw) view = _View.pretty;
   }
 
   void _runPath() {
@@ -111,34 +154,16 @@ class _ResponseViewState extends State<ResponseView> {
     final suggested = _path.text.trim().split(RegExp(r'[.\[\]\x27"$*?@()]')).lastWhere(
         (s) => RegExp(r'^[A-Za-z_]\w*$').hasMatch(s),
         orElse: () => 'value');
-    final ctrl = TextEditingController(text: suggested);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Save to environment'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(
-            'Value: ${value.length > 80 ? '${value.substring(0, 80)}…' : value}',
-            style: const TextStyle(fontFamily: mono, fontSize: 12, color: AppColors.muted),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Variable name'),
-            onSubmitted: (t) => Navigator.pop(ctx, t),
-          ),
-          const SizedBox(height: 8),
-          const Text('Use it anywhere as {{name}}',
-              style: TextStyle(fontSize: 12, color: AppColors.muted)),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('Save')),
-        ],
-      ),
+    final name = await promptText(
+      context,
+      title: 'Save to environment',
+      initial: suggested,
+      label: 'Variable name',
+      hint: 'Use it anywhere as {{name}}',
+      message: 'Value: ${value.length > 80 ? '${value.substring(0, 80)}…' : value}',
+      okLabel: 'Save',
     );
-    if (name == null || name.trim().isEmpty) return;
+    if (name == null || name.trim().isEmpty || !mounted) return;
     widget.store.setVariable(name.trim(), value);
     _toast('Saved {{${name.trim()}}} in ${widget.store.activeEnv?.name ?? 'environment'}');
   }
@@ -158,9 +183,9 @@ class _ResponseViewState extends State<ResponseView> {
             showSelectedIcon: false,
             style: const ButtonStyle(visualDensity: VisualDensity.compact),
             segments: [
-              const ButtonSegment(value: _View.pretty, label: Text('Pretty')),
+              ButtonSegment(value: _View.pretty, label: Text(res.binary ? 'Preview' : 'Pretty')),
               if (_isJson) const ButtonSegment(value: _View.tree, label: Text('Tree')),
-              const ButtonSegment(value: _View.raw, label: Text('Raw')),
+              if (!res.binary) const ButtonSegment(value: _View.raw, label: Text('Raw')),
               ButtonSegment(value: _View.headers, label: Text('Headers ${res.headers.length}')),
             ],
             selected: {view},
@@ -169,7 +194,11 @@ class _ResponseViewState extends State<ResponseView> {
         ),
         if (_isJson && view != _View.headers) _pathBar(),
         const Divider(),
-        Expanded(child: _body(res)),
+        Expanded(
+          child: _parsing && view != _View.headers && view != _View.raw
+              ? const Center(child: CircularProgressIndicator())
+              : _body(res),
+        ),
       ],
     );
   }
@@ -196,8 +225,13 @@ class _ResponseViewState extends State<ResponseView> {
         const Icon(Icons.data_object, size: 15, color: AppColors.muted),
         const SizedBox(width: 3),
         Text(formatBytes(res.sizeBytes), style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+        if (res.truncated)
+          const Tooltip(
+            message: 'Only the first part of the body is shown',
+            child: Text(' · truncated', style: TextStyle(color: AppColors.warning, fontSize: 12.5)),
+          ),
         const Spacer(),
-        IconButton(
+        if (!res.binary || view == _View.headers) IconButton(
           tooltip: 'Copy',
           icon: const Icon(Icons.copy_all_outlined, size: 20),
           onPressed: () {
@@ -296,6 +330,7 @@ class _ResponseViewState extends State<ResponseView> {
           ),
         );
       case _View.pretty:
+        if (res.binary) return _binaryView(res);
         if (_isJson) {
           return SingleChildScrollView(
             padding: const EdgeInsets.all(12),
@@ -310,6 +345,43 @@ class _ResponseViewState extends State<ResponseView> {
           ),
         );
     }
+  }
+
+  Widget _binaryView(ResponseData res) {
+    final bytes = res.bytes;
+    final type = res.contentType ?? 'unknown type';
+    final info = Text('Binary response · $type · ${formatBytes(res.sizeBytes)}',
+        style: const TextStyle(color: AppColors.muted, fontSize: 12.5));
+    if (bytes == null) {
+      // Loaded from history: the bytes aren't stored.
+      return ListView(padding: const EdgeInsets.all(16), children: [
+        info,
+        const SizedBox(height: 8),
+        const Text('Binary bodies are not kept in history. Send the request again to see it.',
+            style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+      ]);
+    }
+    final isImage = type.toLowerCase().startsWith('image/');
+    return ListView(padding: const EdgeInsets.all(16), children: [
+      info,
+      const SizedBox(height: 12),
+      if (isImage && !res.truncated)
+        Image.memory(
+          bytes,
+          fit: BoxFit.contain,
+          semanticLabel: 'Response image',
+          errorBuilder: (_, __, ___) =>
+              const Text('Could not decode this image.', style: TextStyle(color: AppColors.muted)),
+        )
+      else ...[
+        const Text('First bytes (hex)', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        SelectableText(
+          hexDump(bytes.length > 512 ? bytes.sublist(0, 512) : bytes),
+          style: const TextStyle(fontFamily: mono, fontSize: 11.5, height: 1.4),
+        ),
+      ],
+    ]);
   }
 
   Widget _errorView(ResponseData res) {

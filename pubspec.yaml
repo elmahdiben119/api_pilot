@@ -1,15 +1,17 @@
 name: api_pilot
 description: "API Pilot - a mobile API client: REST, GraphQL, environments, collections, history and JSONPath."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: '>=3.9.0 <4.0.0'
 
 dependencies:
+  file_picker: ^13.1.0
   flutter:
     sdk: flutter
-  http: ^1.2.1
+  flutter_secure_storage: ^11.2.0
+  http: ^1.5.0
   shared_preferences: ^2.2.3
 
 dev_dependencies:

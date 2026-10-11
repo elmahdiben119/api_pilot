@@ -68,11 +68,21 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: IndexedStack(index: _tab, children: [
-          RequestScreen(store: store),
-          CollectionsScreen(store: store, onOpen: _openRequestTab),
-          HistoryScreen(store: store, onOpen: _openRequestTab),
-          EnvironmentsScreen(store: store),
+        child: Column(children: [
+          if (store.storageError != null)
+            MaterialBanner(
+              leading: const Icon(Icons.warning_amber_rounded, color: AppColors.warning),
+              content: Text(store.storageError!),
+              actions: const [SizedBox.shrink()],
+            ),
+          Expanded(
+            child: IndexedStack(index: _tab, children: [
+              RequestScreen(store: store),
+              CollectionsScreen(store: store, onOpen: _openRequestTab),
+              HistoryScreen(store: store, onOpen: _openRequestTab),
+              EnvironmentsScreen(store: store),
+            ]),
+          ),
         ]),
       ),
       bottomNavigationBar: NavigationBar(

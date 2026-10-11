@@ -9,6 +9,7 @@ import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/code_field.dart';
+import '../widgets/dialogs.dart';
 import '../widgets/graphql_schema_sheet.dart';
 import '../widgets/kv_editor.dart';
 import '../widgets/response_view.dart';
@@ -55,28 +56,8 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
 
   // ------------------------------------------------------------- dialogs
 
-  Future<String?> _prompt(String title, {String initial = '', String label = 'Name'}) {
-    final c = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          decoration: InputDecoration(labelText: label),
-          onSubmitted: (t) => Navigator.pop(ctx, t),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('OK')),
-        ],
-      ),
-    );
-  }
-
   Future<void> _rename() async {
-    final n = await _prompt('Rename request', initial: store.current.name);
+    final n = await promptText(context, title: 'Rename request', initial: store.current.name);
     if (n == null || n.trim().isEmpty) return;
     store.current.name = n.trim();
     if (store.currentIsSaved) {
@@ -92,39 +73,16 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
       _toast('Saved to ${store.currentCollectionName}');
       return;
     }
-    final nameCtrl = TextEditingController(text: store.current.name);
-    String? colId = store.collections.isNotEmpty ? store.collections.first.id : null;
-    const newCol = '__new__';
-    final ok = await showDialog<bool>(
+    final picked = await showDialog<({String name, String? collectionId})>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) => AlertDialog(
-          title: const Text('Save request'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Request name')),
-            const SizedBox(height: 14),
-            DropdownButtonFormField<String>(
-              initialValue: colId ?? newCol,
-              decoration: const InputDecoration(labelText: 'Collection'),
-              items: [
-                for (final c in store.collections) DropdownMenuItem(value: c.id, child: Text(c.name)),
-                const DropdownMenuItem(value: newCol, child: Text('+ New collection…')),
-              ],
-              onChanged: (v) => setD(() => colId = v),
-            ),
-          ]),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
-          ],
-        ),
-      ),
+      builder: (_) => _SaveDialog(store: store),
     );
-    final name = nameCtrl.text;
-    if (ok != true) return;
+    if (picked == null || !mounted) return;
+    final name = picked.name;
+    final colId = picked.collectionId;
     final Collection target;
-    if (colId == null || colId == newCol) {
-      final n = await _prompt('New collection');
+    if (colId == null) {
+      final n = await promptText(context, title: 'New collection');
       if (n == null || n.trim().isEmpty) return;
       target = store.addCollection(n.trim());
     } else {
@@ -142,27 +100,14 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
   Future<void> _importCurl() async {
     final clip = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
     if (!mounted) return;
-    final c = TextEditingController(text: clip.trimLeft().startsWith('curl') ? clip.trim() : '');
-    final text = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import cURL'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: TextField(
-            controller: c,
-            autofocus: c.text.isEmpty,
-            maxLines: 10,
-            minLines: 5,
-            style: const TextStyle(fontFamily: mono, fontSize: 12),
-            decoration: const InputDecoration(hintText: "curl -X POST 'https://…' -H '…' -d '…'"),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Import')),
-        ],
-      ),
+    final text = await promptText(
+      context,
+      title: 'Import cURL',
+      initial: clip.trimLeft().startsWith('curl') ? clip.trim() : '',
+      hint: "curl -X POST 'https://…' -H '…' -d '…'",
+      okLabel: 'Import',
+      maxLines: 10,
+      monospace: true,
     );
     if (text == null || text.trim().isEmpty) return;
     try {
@@ -418,10 +363,10 @@ class _UrlBarState extends State<_UrlBar> {
                 padding: const EdgeInsets.symmetric(horizontal: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
-              onPressed: store.sending ? null : widget.onSend,
+              onPressed: store.sending ? store.cancelSend : widget.onSend,
               child: store.sending
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.send_rounded, size: 20),
+                  ? const Icon(Icons.stop_rounded, size: 22, semanticLabel: 'Cancel request')
+                  : const Icon(Icons.send_rounded, size: 20, semanticLabel: 'Send'),
             ),
           ),
         ]),
@@ -437,7 +382,7 @@ class _UrlBarState extends State<_UrlBar> {
               style: TextStyle(
                 fontFamily: mono,
                 fontSize: 11.5,
-                color: missing.isNotEmpty ? const Color(0xFFFBBF24) : AppColors.muted,
+                color: missing.isNotEmpty ? AppColors.warning : AppColors.muted,
               ),
             ),
           ),
@@ -753,6 +698,58 @@ class _BodyEditorState extends State<_BodyEditor> {
           ],
       },
     ]);
+  }
+}
+
+// ============================================================ save dialog
+
+/// Asks for a request name and a target collection. A null collectionId
+/// means "create a new collection".
+class _SaveDialog extends StatefulWidget {
+  final AppStore store;
+  const _SaveDialog({required this.store});
+
+  @override
+  State<_SaveDialog> createState() => _SaveDialogState();
+}
+
+class _SaveDialogState extends State<_SaveDialog> {
+  static const _newCol = '__new__';
+  late final TextEditingController _name = TextEditingController(text: widget.store.current.name);
+  late String _colId = widget.store.collections.firstOrNull?.id ?? _newCol;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Save request'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: _name, decoration: const InputDecoration(labelText: 'Request name')),
+        const SizedBox(height: 14),
+        DropdownButtonFormField<String>(
+          initialValue: _colId,
+          decoration: const InputDecoration(labelText: 'Collection'),
+          items: [
+            for (final c in widget.store.collections) DropdownMenuItem(value: c.id, child: Text(c.name)),
+            const DropdownMenuItem(value: _newCol, child: Text('+ New collection…')),
+          ],
+          onChanged: (v) => setState(() => _colId = v ?? _newCol),
+        ),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () =>
+              Navigator.pop(context, (name: _name.text, collectionId: _colId == _newCol ? null : _colId)),
+          child: const Text('Save'),
+        ),
+      ],
+    );
   }
 }
 

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 final _rand = Random();
 
@@ -141,6 +142,16 @@ class ResponseData {
   final String? error;
   final String finalUrl;
 
+  /// True when [body] holds only the start of the real response body.
+  final bool truncated;
+
+  /// Raw body of a binary response (then [body] is empty). Kept in memory
+  /// only, never persisted.
+  final Uint8List? bytes;
+
+  /// Whether the body was binary. Survives persistence, unlike [bytes].
+  final bool binary;
+
   const ResponseData({
     this.statusCode,
     this.reason = '',
@@ -150,7 +161,10 @@ class ResponseData {
     this.sizeBytes = 0,
     this.error,
     this.finalUrl = '',
-  });
+    this.truncated = false,
+    this.bytes,
+    bool binary = false,
+  }) : binary = binary || bytes != null;
 
   bool get isError => error != null;
 
@@ -162,17 +176,22 @@ class ResponseData {
   }
 
   /// Parsed JSON body, or null if the body is not JSON.
-  dynamic get json {
-    final t = body.trimLeft();
+  dynamic get json => decodeJson(body);
+
+  /// Parses [text] if it looks like a JSON object or array, else null.
+  /// Static so it can run in another isolate via `compute`.
+  static dynamic decodeJson(String text) {
+    final t = text.trimLeft();
     if (t.isEmpty || !(t.startsWith('{') || t.startsWith('['))) return null;
     try {
-      return jsonDecode(body);
+      return jsonDecode(text);
     } catch (_) {
       return null;
     }
   }
 
-  Map<String, dynamic> toJson({int maxBody = 150000}) => {
+  /// History keeps at most [maxBody] characters of the body.
+  Map<String, dynamic> toJson({int maxBody = 50000}) => {
         'status': statusCode,
         'reason': reason,
         'headers': headers,
@@ -181,6 +200,8 @@ class ResponseData {
         'size': sizeBytes,
         'error': error,
         'url': finalUrl,
+        if (truncated || body.length > maxBody) 'trunc': true,
+        if (binary) 'bin': true,
       };
 
   factory ResponseData.fromJson(Map<String, dynamic> j) => ResponseData(
@@ -192,6 +213,8 @@ class ResponseData {
         sizeBytes: j['size'] as int? ?? 0,
         error: j['error'] as String?,
         finalUrl: j['url'] as String? ?? '',
+        truncated: j['trunc'] as bool? ?? false,
+        binary: j['bin'] as bool? ?? false,
       );
 }
 
