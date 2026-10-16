@@ -26,16 +26,17 @@ API client for Android, built with Flutter. Test REST and GraphQL APIs from your
 You need Flutter 3.35 or newer.
 
 ```bash
-bash setup.sh                # generates android/ and applies the manifest
+bash setup.sh                # applies the manifest and fetches packages
 flutter run                  # phone connected with USB debugging, or an emulator
 flutter build apk --release  # → build/app/outputs/flutter-apk/app-release.apk
 ```
 
-On Windows without bash, run the two commands from `setup.sh` by hand:
+`android/` is committed, so there's nothing to generate. On Windows without bash, run the
+steps from `setup.sh` by hand:
 
 ```bash
-flutter create --platforms=android --org dev.apipilot --project-name api_pilot .
 copy android_overrides\AndroidManifest.xml android\app\src\main\AndroidManifest.xml
+flutter pub get
 ```
 
 ### No laptop? Build in the cloud
@@ -53,15 +54,24 @@ If that file is missing, they fall back to the debug key, which is fine for pers
 **Back up `android/app/upload-keystore.jks` and `android/key.properties` somewhere safe.**
 If you lose them you can no longer publish updates under the same signing identity.
 
-To sign in GitHub Actions, add two repository secrets:
+`storeFile` is resolved relative to `android/app/`. For a keystore at the project root, use
+`storeFile=../../apipilot-release.jks`.
+
+To sign in GitHub Actions, add these repository secrets:
 
 - `ANDROID_KEYSTORE_BASE64`: the keystore, base64-encoded
-  (`base64 -w0 android/app/upload-keystore.jks` in Git Bash)
-- `ANDROID_KEYSTORE_PASSWORD`: the password from `key.properties`
+  (`base64 -w0 apipilot-release.jks` in Git Bash)
+- `ANDROID_KEYSTORE_PASSWORD`: the `storePassword` from `key.properties`
+- `ANDROID_KEY_ALIAS`: the `keyAlias` from `key.properties`
+- `ANDROID_KEY_PASSWORD`: only needed if `keyPassword` differs from `storePassword`
 
 The workflow then builds a signed APK and an App Bundle (`api-pilot-aab`, the format Google Play wants).
 
-The application ID is `dev.apipilot.api_pilot`.
+The application ID is `com.theminds.apipilot`.
+
+### Launcher icon
+
+The source artwork and the steps to regenerate it are in [assets/branding/](assets/branding/README.md).
 
 ## Project layout
 

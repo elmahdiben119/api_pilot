@@ -70,6 +70,81 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   });
 
+  group('iOS layout', () {
+    // A small phone, so overflowing rows fail the test.
+    void phone(WidgetTester tester, Brightness brightness) {
+      tester.view.physicalSize = const Size(360, 740);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.platformBrightnessTestValue = brightness;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+    }
+
+    for (final b in Brightness.values) {
+      testWidgets('every tab and request section lays out on a small phone (${b.name})', (tester) async {
+        phone(tester, b);
+        final store = await _seededStore();
+        await tester.pumpWidget(ApiPilotApp(store: store));
+        final palette = b == Brightness.dark ? AppColors.dark : AppColors.light;
+        expect(Theme.of(tester.element(find.text('List posts'))).extension<AppColors>(), palette);
+
+        for (final section in ['Headers', 'Auth', 'Body', 'Response', 'Params']) {
+          await tester.tap(find.text(section).first);
+          await tester.pumpAndSettle();
+        }
+        for (final tab in ['Collections', 'History', 'Env', 'Request']) {
+          await tester.tap(find.text(tab).last);
+          await tester.pumpAndSettle();
+        }
+        await tester.pump(const Duration(seconds: 1));
+      });
+    }
+
+    testWidgets('method action sheet changes the method', (tester) async {
+      phone(tester, Brightness.light);
+      final store = await _seededStore();
+      await tester.pumpWidget(ApiPilotApp(store: store));
+      await tester.tap(find.bySemanticsLabel('Method GET'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('PATCH'));
+      await tester.pumpAndSettle();
+      expect(store.current.method, 'PATCH');
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('Save as… page saves into the picked collection', (tester) async {
+      phone(tester, Brightness.dark);
+      final store = await _seededStore();
+      store.addCollection('Second');
+      await tester.pumpWidget(ApiPilotApp(store: store));
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save as…'));
+      await tester.pumpAndSettle();
+      expect(find.text('Save request'), findsOneWidget);
+      await tester.tap(find.text('Second'));
+      await tester.pump();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(store.currentCollectionName, 'Second');
+      expect(store.collections.last.requests.single.name, 'List posts');
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('tapping an environment makes it active', (tester) async {
+      phone(tester, Brightness.light);
+      final store = await _seededStore();
+      store.setActiveEnv(null);
+      await tester.pumpWidget(ApiPilotApp(store: store));
+      await tester.tap(find.text('Env'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('JSONPlaceholder'));
+      await tester.pumpAndSettle();
+      expect(store.activeEnv?.name, 'JSONPlaceholder');
+      await tester.pump(const Duration(seconds: 1));
+    });
+  });
+
   group('ResponseView', () {
     Future<void> pumpView(WidgetTester tester, ResponseData res) async {
       final store = await _seededStore();

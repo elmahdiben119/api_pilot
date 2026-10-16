@@ -46,3 +46,11 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Branding tool (tool/branding) dependencies
+node_modules/
+
+# Signing keys: never commit
+*.jks
+*.keystore
+key.properties

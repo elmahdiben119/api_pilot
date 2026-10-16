@@ -1,7 +1,9 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../theme.dart';
+import 'ios.dart';
 
 /// Editable key/value table. Mutates [items] in place and calls [onChanged].
 /// Give it a new Key when [items] is replaced from outside.
@@ -73,91 +75,87 @@ class _KeyValueEditorState extends State<KeyValueEditor> {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     const style = TextStyle(fontFamily: mono, fontSize: 13);
-    final children = <Widget>[
+    final rows = <Widget>[
       for (final r in _rows)
         Padding(
           key: ObjectKey(r),
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 32,
-                child: Checkbox(
-                  value: r.kv.enabled,
-                  visualDensity: VisualDensity.compact,
-                  onChanged: (v) {
-                    setState(() => r.kv.enabled = v ?? true);
-                    widget.onChanged();
-                  },
-                ),
+          padding: const EdgeInsets.only(right: 4),
+          child: Row(children: [
+            IconButton(
+              tooltip: r.kv.enabled ? 'Disable' : 'Enable',
+              icon: Icon(
+                r.kv.enabled ? CupertinoIcons.checkmark_circle_fill : CupertinoIcons.circle,
+                size: 22,
+                color: r.kv.enabled ? c.accent : c.muted,
               ),
-              const SizedBox(width: 4),
-              Expanded(
-                flex: 5,
-                child: TextField(
-                  controller: r.k,
-                  style: style,
-                  decoration: InputDecoration(hintText: widget.keyHint),
-                  onChanged: (t) {
-                    r.kv.key = t;
-                    widget.onChanged();
-                  },
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                flex: 6,
-                child: TextField(
-                  controller: r.v,
-                  style: style,
-                  decoration: InputDecoration(hintText: widget.valueHint),
-                  onChanged: (t) {
-                    r.kv.value = t;
-                    widget.onChanged();
-                  },
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 18, color: AppColors.muted),
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _remove(r),
-              ),
-            ],
-          ),
-        ),
-      Row(
-        children: [
-          TextButton.icon(
-            onPressed: _add,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('Add'),
-          ),
-          if (widget.presets.isNotEmpty)
-            PopupMenuButton<MapEntry<String, String>>(
-              tooltip: 'Common',
-              onSelected: (e) => _add(e.key, e.value),
-              itemBuilder: (_) => [
-                for (final p in widget.presets)
-                  PopupMenuItem(
-                    value: p,
-                    child: Text('${p.key}: ${p.value}',
-                        style: const TextStyle(fontFamily: mono, fontSize: 13)),
-                  ),
-              ],
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.bolt, size: 18, color: AppColors.accent),
-                  SizedBox(width: 4),
-                  Text('Common', style: TextStyle(color: AppColors.accent)),
-                ]),
+              onPressed: () {
+                setState(() => r.kv.enabled = !r.kv.enabled);
+                widget.onChanged();
+              },
+            ),
+            Expanded(
+              flex: 5,
+              child: TextField(
+                controller: r.k,
+                style: style.copyWith(color: r.kv.enabled ? c.text : c.muted),
+                autocorrect: false,
+                enableSuggestions: false,
+                decoration: plainInput(widget.keyHint),
+                onChanged: (t) {
+                  r.kv.key = t;
+                  widget.onChanged();
+                },
               ),
             ),
-        ],
-      ),
+            Container(width: 0.5, height: 28, color: c.border, margin: const EdgeInsets.symmetric(horizontal: 8)),
+            Expanded(
+              flex: 6,
+              child: TextField(
+                controller: r.v,
+                style: style.copyWith(color: r.kv.enabled ? c.text : c.muted),
+                autocorrect: false,
+                enableSuggestions: false,
+                decoration: plainInput(widget.valueHint),
+                onChanged: (t) {
+                  r.kv.value = t;
+                  widget.onChanged();
+                },
+              ),
+            ),
+            IconButton(
+              tooltip: 'Remove',
+              icon: Icon(CupertinoIcons.minus_circle_fill, size: 20, color: c.danger),
+              onPressed: () => _remove(r),
+            ),
+          ]),
+        ),
+      Row(children: [
+        Expanded(
+          child: IosTile(
+            leading: Icon(CupertinoIcons.plus_circle_fill, color: c.success, size: 22),
+            title: Text('Add ${widget.keyHint.toLowerCase()}', style: TextStyle(color: c.accent)),
+            onTap: _add,
+          ),
+        ),
+        if (widget.presets.isNotEmpty)
+          TextButton.icon(
+            onPressed: () async {
+              final e = await showActionSheet<MapEntry<String, String>>(
+                context,
+                title: 'Common ${widget.keyHint.toLowerCase()}s',
+                actions: [for (final p in widget.presets) SheetAction('${p.key}: ${p.value}', p)],
+              );
+              if (e != null) _add(e.key, e.value);
+            },
+            icon: const Icon(CupertinoIcons.bolt_fill, size: 16),
+            label: const Text('Common'),
+          ),
+      ]),
     ];
-    if (widget.shrinkWrap) return Column(children: children);
-    return ListView(padding: const EdgeInsets.fromLTRB(8, 12, 8, 24), children: children);
+    final section = IosSection(dividerIndent: 48, margin: EdgeInsets.zero, children: rows);
+    if (widget.shrinkWrap) return section;
+    return ListView(padding: const EdgeInsets.fromLTRB(16, 12, 16, 24), children: [section]);
   }
 }

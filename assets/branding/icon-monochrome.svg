@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    API Pilot: monochrome layer for Android 13+ themed icons. Only the alpha
+    channel is used; the system tints it. Same geometry as icon-foreground.svg.
+  -->
+  <g id="glyph" transform="translate(0 -34)" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+    <polyline id="bracket-left" points="364,420 240,550 364,680" stroke-width="64"/>
+    <polyline id="bracket-right" points="660,420 784,550 660,680" stroke-width="64"/>
+    <g id="heading-arrow">
+      <line id="shaft" x1="476" y1="684" x2="569" y2="454" stroke-width="64"/>
+      <polygon id="head" points="597.5,383.6 617.2,484.4 513.4,442.4" fill="#FFFFFF" stroke-width="16"/>
+    </g>
+  </g>
+</svg>

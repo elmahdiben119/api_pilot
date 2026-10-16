@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -8,71 +9,65 @@ import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets/dialogs.dart';
+import '../widgets/ios.dart';
 
-class MethodBadge extends StatelessWidget {
-  final String method;
-  const MethodBadge(this.method, {super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final m = method.toUpperCase();
-    return SizedBox(
-      width: 52,
-      child: Text(
-        m == 'DELETE' ? 'DEL' : (m == 'OPTIONS' ? 'OPT' : m),
-        style: TextStyle(color: methodColor(m), fontWeight: FontWeight.w800, fontFamily: mono, fontSize: 12),
-      ),
-    );
-  }
-}
-
-class CollectionsScreen extends StatelessWidget {
+class CollectionsScreen extends StatefulWidget {
   final AppStore store;
   final VoidCallback onOpen;
   const CollectionsScreen({super.key, required this.store, required this.onOpen});
 
-  void _toast(BuildContext context, String msg) {
+  @override
+  State<CollectionsScreen> createState() => _CollectionsScreenState();
+}
+
+class _CollectionsScreenState extends State<CollectionsScreen> {
+  /// Ids of collections folded by the user.
+  final _collapsed = <String>{};
+
+  AppStore get store => widget.store;
+
+  void _toast(String msg) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  void _import(BuildContext context, String text) {
+  void _import(String text) {
     try {
-      _toast(context, store.importJson(text).summary);
+      _toast(store.importJson(text).summary);
     } on FormatException catch (e) {
-      _toast(context, e.message);
+      _toast(e.message);
     }
   }
 
-  Future<void> _importClipboard(BuildContext context) async {
+  Future<void> _importClipboard() async {
     final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
-    if (!context.mounted) return;
+    if (!mounted) return;
     if (text.trim().isEmpty) {
-      _toast(context, 'Copy a Postman collection/environment or API Pilot export JSON first');
+      _toast('Copy a Postman collection/environment or API Pilot export JSON first');
       return;
     }
-    _import(context, text);
+    _import(text);
   }
 
-  Future<void> _importFile(BuildContext context) async {
+  Future<void> _importFile() async {
     try {
       final file = await FilePicker.pickFile(dialogTitle: 'Import collection or environment');
       if (file == null) return;
       final size = await file.length() ?? 0;
       if (size > _maxImportBytes) throw const FormatException('File is too large (max 20 MB)');
       final text = utf8.decode(await file.readAsBytes(), allowMalformed: true);
-      if (context.mounted) _import(context, text);
+      if (mounted) _import(text);
     } on FormatException catch (e) {
-      if (context.mounted) _toast(context, e.message);
+      if (mounted) _toast(e.message);
     } catch (e) {
-      if (context.mounted) _toast(context, 'Could not read the file: $e');
+      if (mounted) _toast('Could not read the file: $e');
     }
   }
 
   static const _maxImportBytes = 20 * 1024 * 1024;
 
-  Future<void> _exportFile(BuildContext context, String json, String fileName) async {
+  Future<void> _exportFile(String json, String fileName) async {
     if (!await confirm(context, _secretsWarning, action: 'Export')) return;
     try {
       final uri = await FilePicker.saveFile(
@@ -81,9 +76,9 @@ class CollectionsScreen extends StatelessWidget {
         mimeType: 'application/json',
         dialogTitle: 'Export',
       );
-      if (uri != null && context.mounted) _toast(context, 'Exported $fileName');
+      if (uri != null && mounted) _toast('Exported $fileName');
     } catch (e) {
-      if (context.mounted) _toast(context, 'Export failed: $e');
+      if (mounted) _toast('Export failed: $e');
     }
   }
 
@@ -98,202 +93,214 @@ class CollectionsScreen extends StatelessWidget {
     return s.isEmpty ? 'collection' : s;
   }
 
+  Future<void> _importExportMenu() async {
+    final k = await showActionSheet<String>(context, title: 'Import & export', actions: const [
+      SheetAction('Import from file', 'import-file', icon: CupertinoIcons.doc),
+      SheetAction('Import from clipboard', 'import', icon: CupertinoIcons.doc_on_clipboard),
+      SheetAction('Export all to file', 'export-file', icon: CupertinoIcons.square_arrow_down),
+      SheetAction('Export all to clipboard', 'export', icon: CupertinoIcons.square_arrow_up),
+    ]);
+    if (!mounted) return;
+    switch (k) {
+      case 'import-file':
+        _importFile();
+      case 'import':
+        _importClipboard();
+      case 'export-file':
+        _exportFile(store.exportAll(), 'api-pilot-export.json');
+      case 'export':
+        if (!await confirm(context, _secretsWarning, action: 'Copy')) return;
+        await Clipboard.setData(ClipboardData(text: store.exportAll()));
+        if (mounted) _toast('All collections & environments copied as JSON');
+    }
+  }
+
+  Future<void> _collectionMenu(Collection c) async {
+    final k = await showActionSheet<String>(context, title: c.name, actions: const [
+      SheetAction('Add request', 'add', icon: CupertinoIcons.add),
+      SheetAction('Rename', 'rename', icon: CupertinoIcons.pencil),
+      SheetAction('Copy as JSON', 'export', icon: CupertinoIcons.doc_on_clipboard),
+      SheetAction('Export to file', 'export-file', icon: CupertinoIcons.square_arrow_down),
+      SheetAction('Delete', 'delete', destructive: true, icon: CupertinoIcons.trash),
+    ]);
+    if (!mounted) return;
+    switch (k) {
+      case 'add':
+        final r = ApiRequest(name: 'New request');
+        c.requests.add(r);
+        store.openRequest(r, collectionId: c.id);
+        widget.onOpen();
+      case 'rename':
+        final n = await promptText(context, title: 'Rename collection', initial: c.name);
+        if (n != null && n.trim().isNotEmpty) {
+          c.name = n.trim();
+          store.changed();
+        }
+      case 'export':
+        if (!await confirm(context, _secretsWarning, action: 'Copy')) return;
+        await Clipboard.setData(ClipboardData(text: _collectionJson(c)));
+        if (mounted) _toast('Collection copied as JSON');
+      case 'export-file':
+        await _exportFile(_collectionJson(c), '${_fileSafe(c.name)}.json');
+      case 'delete':
+        if (await confirm(context, 'Delete "${c.name}" and its ${c.requests.length} requests?')) {
+          store.deleteCollection(c);
+        }
+    }
+  }
+
+  Future<void> _requestMenu(Collection c, ApiRequest r) async {
+    final k = await showActionSheet<String>(context, title: r.name, actions: const [
+      SheetAction('Duplicate', 'dup', icon: CupertinoIcons.plus_square_on_square),
+      SheetAction('Rename', 'rename', icon: CupertinoIcons.pencil),
+      SheetAction('Delete', 'delete', destructive: true, icon: CupertinoIcons.trash),
+    ]);
+    if (!mounted) return;
+    switch (k) {
+      case 'dup':
+        store.duplicateRequest(c, r);
+      case 'rename':
+        final n = await promptText(context, title: 'Rename request', initial: r.name);
+        if (n != null && n.trim().isNotEmpty) {
+          r.name = n.trim();
+          if (store.current.id == r.id) store.current.name = r.name;
+          store.changed();
+        }
+      case 'delete':
+        if (await confirm(context, 'Delete "${r.name}"?')) store.deleteRequest(c, r);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: store,
-      builder: (context, _) => Scaffold(
-        appBar: AppBar(
-          title: const Text('Collections'),
-          actions: [
-            PopupMenuButton<String>(
-              onSelected: (k) async {
-                switch (k) {
-                  case 'import-file':
-                    _importFile(context);
-                  case 'import':
-                    _importClipboard(context);
-                  case 'export-file':
-                    _exportFile(context, store.exportAll(), 'api-pilot-export.json');
-                  case 'export':
-                    if (!await confirm(context, _secretsWarning, action: 'Copy')) return;
-                    await Clipboard.setData(ClipboardData(text: store.exportAll()));
-                    if (context.mounted) _toast(context, 'All collections & environments copied as JSON');
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(
-                  value: 'import-file',
-                  child: ListTile(
-                    leading: Icon(Icons.file_open_outlined),
-                    title: Text('Import from file'),
-                    subtitle: Text('Postman v2 / environment / API Pilot'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'import',
-                  child: ListTile(leading: Icon(Icons.content_paste_go), title: Text('Import from clipboard')),
-                ),
-                PopupMenuDivider(),
-                PopupMenuItem(
-                  value: 'export-file',
-                  child: ListTile(leading: Icon(Icons.save_alt), title: Text('Export all to file')),
-                ),
-                PopupMenuItem(
-                  value: 'export',
-                  child: ListTile(leading: Icon(Icons.ios_share), title: Text('Export all to clipboard')),
-                ),
-              ],
-            ),
-          ],
-        ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: () async {
-            final n = await promptText(context, title: 'New collection');
-            if (n != null && n.trim().isNotEmpty) store.addCollection(n.trim());
-          },
-          icon: const Icon(Icons.create_new_folder_outlined),
-          label: const Text('Collection'),
-        ),
-        body: store.collections.isEmpty
-            ? const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Text(
-                    'No collections yet.\nSave a request or import a Postman collection from the ⋮ menu.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: AppColors.muted),
-                  ),
-                ),
-              )
-            : ListView(
-                padding: const EdgeInsets.only(bottom: 96),
-                children: [for (final c in store.collections) _collectionTile(context, c)],
-              ),
-      ),
-    );
-  }
-
-  Widget _collectionTile(BuildContext context, Collection c) {
-    return Theme(
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        key: PageStorageKey(c.id),
-        initiallyExpanded: c.id == store.currentCollectionId,
-        leading: const Icon(Icons.folder_outlined, color: AppColors.accent),
-        title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text('${c.requests.length} request${c.requests.length == 1 ? '' : 's'}',
-            style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-        trailing: PopupMenuButton<String>(
-          onSelected: (k) async {
-            switch (k) {
-              case 'add':
-                final r = ApiRequest(name: 'New request');
-                c.requests.add(r);
-                store.openRequest(r, collectionId: c.id);
-                onOpen();
-              case 'rename':
-                final n = await promptText(context, title: 'Rename collection', initial: c.name);
-                if (n != null && n.trim().isNotEmpty) {
-                  c.name = n.trim();
-                  store.changed();
-                }
-              case 'export':
-                if (!await confirm(context, _secretsWarning, action: 'Copy')) return;
-                await Clipboard.setData(ClipboardData(text: _collectionJson(c)));
-                if (context.mounted) _toast(context, 'Collection copied as JSON');
-              case 'export-file':
-                if (context.mounted) await _exportFile(context, _collectionJson(c), '${_fileSafe(c.name)}.json');
-              case 'delete':
-                if (await confirm(context, 'Delete "${c.name}" and its ${c.requests.length} requests?')) {
-                  store.deleteCollection(c);
-                }
-            }
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'add', child: Text('Add request')),
-            PopupMenuItem(value: 'rename', child: Text('Rename')),
-            PopupMenuItem(value: 'export', child: Text('Copy as JSON')),
-            PopupMenuItem(value: 'export-file', child: Text('Export to file')),
-            PopupMenuItem(value: 'delete', child: Text('Delete')),
-          ],
-        ),
-        children: [
-          if (c.requests.isEmpty)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(72, 0, 16, 12),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('Empty', style: TextStyle(color: AppColors.muted)),
-              ),
-            ),
-          ReorderableListView(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            buildDefaultDragHandles: false,
-            onReorderItem: (from, to) {
-              final item = c.requests.removeAt(from);
-              c.requests.insert(to, item);
-              store.changed();
+      builder: (context, _) => LargeTitlePage(
+        title: 'Collections',
+        actions: [
+          NavIconButton(tooltip: 'Import & export', icon: CupertinoIcons.ellipsis_circle, onPressed: _importExportMenu),
+          NavIconButton(
+            tooltip: 'New collection',
+            icon: CupertinoIcons.add,
+            onPressed: () async {
+              final n = await promptText(context, title: 'New collection');
+              if (n != null && n.trim().isNotEmpty) store.addCollection(n.trim());
             },
-            children: [
-              for (var i = 0; i < c.requests.length; i++)
-                _requestTile(context, c, c.requests[i], i),
-            ],
           ),
+        ],
+        slivers: [
+          if (store.collections.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: EmptyState(
+                icon: CupertinoIcons.folder,
+                title: 'No collections yet',
+                message: 'Save a request, or import a Postman collection with the ••• button.',
+              ),
+            )
+          else
+            SliverList.list(children: [for (final c in store.collections) _collection(c)]),
         ],
       ),
     );
   }
 
-  Widget _requestTile(BuildContext context, Collection c, ApiRequest r, int index) {
-    final isCurrent = store.current.id == r.id && store.currentCollectionId == c.id;
-    return ListTile(
-      key: ValueKey(r.id),
-      dense: true,
-      contentPadding: const EdgeInsets.only(left: 24, right: 4),
-      selected: isCurrent,
-      selectedTileColor: AppColors.accent.withValues(alpha: 0.08),
-      leading: MethodBadge(r.method),
-      title: Text(r.name, overflow: TextOverflow.ellipsis),
-      subtitle: Text(r.url, maxLines: 1, overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontFamily: mono, fontSize: 11.5, color: AppColors.muted)),
-      onTap: () {
-        store.openRequest(r, collectionId: c.id);
-        onOpen();
-      },
-      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert, size: 20),
-          onSelected: (k) async {
-            switch (k) {
-              case 'dup':
-                store.duplicateRequest(c, r);
-              case 'rename':
-                final n = await promptText(context, title: 'Rename request', initial: r.name);
-                if (n != null && n.trim().isNotEmpty) {
-                  r.name = n.trim();
-                  if (store.current.id == r.id) store.current.name = r.name;
-                  store.changed();
-                }
-              case 'delete':
-                if (await confirm(context, 'Delete "${r.name}"?')) store.deleteRequest(c, r);
-            }
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'dup', child: Text('Duplicate')),
-            PopupMenuItem(value: 'rename', child: Text('Rename')),
-            PopupMenuItem(value: 'delete', child: Text('Delete')),
-          ],
-        ),
-        ReorderableDragStartListener(
-          index: index,
-          child: const Padding(
-            padding: EdgeInsets.all(8),
-            child: Icon(Icons.drag_handle, size: 20, color: AppColors.muted),
-          ),
+  Widget _collection(Collection c) {
+    final colors = AppColors.of(context);
+    final open = !_collapsed.contains(c.id);
+    final n = c.requests.length;
+    return IosSection(
+      header: c.name,
+      prominent: true,
+      onHeaderTap: () => setState(() => open ? _collapsed.add(c.id) : _collapsed.remove(c.id)),
+      headerTrailing: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text('$n request${n == 1 ? '' : 's'}', style: TextStyle(color: colors.muted, fontSize: 13)),
+        const SizedBox(width: 4),
+        Icon(open ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_forward, size: 14, color: colors.muted),
+        IconButton(
+          tooltip: 'Collection actions',
+          icon: Icon(CupertinoIcons.ellipsis_circle, color: colors.accent),
+          onPressed: () => _collectionMenu(c),
         ),
       ]),
+      children: !open
+          ? const []
+          : [
+              if (c.requests.isEmpty)
+                IosTile(
+                  leading: Icon(CupertinoIcons.plus_circle_fill, color: colors.success, size: 22),
+                  title: Text('Add request', style: TextStyle(color: colors.accent)),
+                  onTap: () {
+                    final r = ApiRequest(name: 'New request');
+                    c.requests.add(r);
+                    store.openRequest(r, collectionId: c.id);
+                    widget.onOpen();
+                  },
+                )
+              else
+                ReorderableListView(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  buildDefaultDragHandles: false,
+                  onReorderItem: (from, to) {
+                    final item = c.requests.removeAt(from);
+                    c.requests.insert(to, item);
+                    store.changed();
+                  },
+                  children: [
+                    for (var i = 0; i < c.requests.length; i++) _request(c, c.requests[i], i),
+                  ],
+                ),
+            ],
+    );
+  }
+
+  Widget _request(Collection c, ApiRequest r, int index) {
+    final colors = AppColors.of(context);
+    final isCurrent = store.current.id == r.id && store.currentCollectionId == c.id;
+    return Dismissible(
+      key: ValueKey(r.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        color: colors.danger,
+        child: Icon(CupertinoIcons.trash, color: colors.onTint),
+      ),
+      confirmDismiss: (_) => confirm(context, 'Delete "${r.name}"?'),
+      onDismissed: (_) => store.deleteRequest(c, r),
+      child: Material(
+        color: colors.surface,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (index > 0) Divider(height: 0.5, thickness: 0.5, indent: 80, color: colors.border),
+          IosTile(
+            selected: isCurrent,
+            leading: MethodBadge(r.method),
+            title: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text(r.url,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontFamily: mono, fontSize: 11.5)),
+            onTap: () {
+              store.openRequest(r, collectionId: c.id);
+              widget.onOpen();
+            },
+            onLongPress: () => _requestMenu(c, r),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(
+                tooltip: 'Request actions',
+                icon: Icon(CupertinoIcons.ellipsis, color: colors.muted),
+                onPressed: () => _requestMenu(c, r),
+              ),
+              ReorderableDragStartListener(
+                index: index,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(CupertinoIcons.line_horizontal_3, size: 20, color: colors.muted),
+                ),
+              ),
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 }

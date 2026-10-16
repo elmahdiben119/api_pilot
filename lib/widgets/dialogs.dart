@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
@@ -14,8 +15,9 @@ Future<String?> promptText(
   int maxLines = 1,
   bool monospace = false,
 }) =>
-    showDialog<String>(
+    showCupertinoDialog<String>(
       context: context,
+      barrierDismissible: true,
       builder: (_) => _PromptDialog(
         title: title,
         initial: initial,
@@ -28,15 +30,22 @@ Future<String?> promptText(
       ),
     );
 
-/// Yes/no confirmation. Returns true only when [action] is tapped.
+/// Yes/no confirmation. Returns true only when [action] is tapped. Delete
+/// and Clear actions are shown in red.
 Future<bool> confirm(BuildContext context, String text, {String action = 'Delete'}) async =>
-    await showDialog<bool>(
+    await showCupertinoDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        content: Text(text),
+      barrierDismissible: true,
+      builder: (ctx) => CupertinoAlertDialog(
+        content: Text(text, style: const TextStyle(fontSize: 14)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(action)),
+          CupertinoDialogAction(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          CupertinoDialogAction(
+            isDestructiveAction: action == 'Delete' || action == 'Clear',
+            isDefaultAction: !(action == 'Delete' || action == 'Clear'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(action),
+          ),
         ],
       ),
     ) ??
@@ -79,30 +88,41 @@ class _PromptDialogState extends State<_PromptDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     final multiline = widget.maxLines > 1;
-    return AlertDialog(
+    return CupertinoAlertDialog(
       title: Text(widget.title),
-      content: SizedBox(
-        width: multiline ? double.maxFinite : null,
+      // Material ancestor for the TextField (and its selection handles).
+      content: Material(
+        type: MaterialType.transparency,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (widget.message != null) ...[
-            Text(widget.message!, style: const TextStyle(fontFamily: mono, fontSize: 12, color: AppColors.muted)),
-            const SizedBox(height: 12),
+            const SizedBox(height: 4),
+            Text(widget.message!, style: TextStyle(fontFamily: mono, fontSize: 12, color: c.muted)),
           ],
+          const SizedBox(height: 12),
           TextField(
             controller: _c,
             autofocus: true,
             maxLines: widget.maxLines,
             minLines: multiline ? 5 : 1,
-            style: widget.monospace ? const TextStyle(fontFamily: mono, fontSize: 12) : null,
-            decoration: InputDecoration(labelText: multiline ? null : widget.label, hintText: widget.hint),
+            style: TextStyle(fontSize: widget.monospace ? 12 : 14, fontFamily: widget.monospace ? mono : null),
+            decoration: InputDecoration(
+              hintText: widget.hint ?? widget.label,
+              fillColor: c.surface,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            ),
             onSubmitted: multiline ? null : (t) => Navigator.pop(context, t),
           ),
         ]),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(context, _c.text), child: Text(widget.okLabel)),
+        CupertinoDialogAction(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        CupertinoDialogAction(
+          isDefaultAction: true,
+          onPressed: () => Navigator.pop(context, _c.text),
+          child: Text(widget.okLabel),
+        ),
       ],
     );
   }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -11,6 +12,7 @@ import '../theme.dart';
 import '../widgets/code_field.dart';
 import '../widgets/dialogs.dart';
 import '../widgets/graphql_schema_sheet.dart';
+import '../widgets/ios.dart';
 import '../widgets/kv_editor.dart';
 import '../widgets/response_view.dart';
 
@@ -24,6 +26,14 @@ const _headerPresets = [
   MapEntry('X-Request-Id', '{{\$uuid}}'),
 ];
 
+String _bodyLabel(BodyType t) => switch (t) {
+      BodyType.json => 'JSON',
+      BodyType.text => 'Text',
+      BodyType.form => 'Form URL-encoded',
+      BodyType.graphql => 'GraphQL',
+      BodyType.none => 'None',
+    };
+
 class RequestScreen extends StatefulWidget {
   final AppStore store;
   const RequestScreen({super.key, required this.store});
@@ -33,8 +43,10 @@ class RequestScreen extends StatefulWidget {
 }
 
 class _RequestScreenState extends State<RequestScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 5, vsync: this);
+  late final TabController _tabs = TabController(length: 5, vsync: this)..addListener(_onTab);
   AppStore get store => widget.store;
+
+  void _onTab() => setState(() {});
 
   @override
   void dispose() {
@@ -73,9 +85,9 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
       _toast('Saved to ${store.currentCollectionName}');
       return;
     }
-    final picked = await showDialog<({String name, String? collectionId})>(
-      context: context,
-      builder: (_) => _SaveDialog(store: store),
+    final picked = await Navigator.push<({String name, String? collectionId})>(
+      context,
+      MaterialPageRoute(fullscreenDialog: true, builder: (_) => _SavePage(store: store)),
     );
     if (picked == null || !mounted) return;
     final name = picked.name;
@@ -129,6 +141,29 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
     }
   }
 
+  Future<void> _menu() async {
+    final k = await showActionSheet<String>(context, actions: const [
+      SheetAction('New request', 'new', icon: CupertinoIcons.square_pencil),
+      SheetAction('Save as…', 'saveas', icon: CupertinoIcons.square_on_square),
+      SheetAction('Rename', 'rename', icon: CupertinoIcons.pencil),
+      SheetAction('Import cURL', 'curl-in', icon: CupertinoIcons.arrow_down_doc),
+      SheetAction('Copy as cURL', 'curl-out', icon: CupertinoIcons.chevron_left_slash_chevron_right),
+    ]);
+    switch (k) {
+      case 'new':
+        store.newRequest();
+        _tabs.animateTo(0);
+      case 'saveas':
+        _save(forceDialog: true);
+      case 'curl-in':
+        _importCurl();
+      case 'curl-out':
+        _copyCurl();
+      case 'rename':
+        _rename();
+    }
+  }
+
   // --------------------------------------------------------------- build
 
   @override
@@ -136,84 +171,84 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) {
+        final c = AppColors.of(context);
         final r = store.current;
         final v = store.loadVersion;
         final res = store.response;
         final activeParams = r.params.where((p) => p.enabled && p.key.isNotEmpty).length;
         final activeHeaders = r.headers.where((p) => p.enabled && p.key.isNotEmpty).length;
+        Widget count(String label, int n) => Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(label),
+              if (n > 0) Text(' $n', style: TextStyle(color: c.accent, fontWeight: FontWeight.w600)),
+            ]);
 
         return Scaffold(
           appBar: AppBar(
-            titleSpacing: 16,
+            leadingWidth: 112,
+            leading: _EnvChip(store: store),
             title: InkWell(
               onTap: _rename,
-              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(r.name, overflow: TextOverflow.ellipsis),
-                Text(
-                  store.currentIsSaved ? store.currentCollectionName ?? '' : 'Not saved',
-                  style: const TextStyle(fontSize: 12, color: AppColors.muted, fontWeight: FontWeight.w400),
-                ),
-              ]),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(r.name, overflow: TextOverflow.ellipsis),
+                  Text(
+                    store.currentIsSaved ? store.currentCollectionName ?? '' : 'Not saved',
+                    style: TextStyle(fontSize: 12, color: c.muted, fontWeight: FontWeight.w400),
+                  ),
+                ]),
+              ),
             ),
             actions: [
-              _EnvChip(store: store),
-              IconButton(tooltip: 'Save', icon: const Icon(Icons.save_outlined), onPressed: _save),
-              PopupMenuButton<String>(
-                onSelected: (k) {
-                  switch (k) {
-                    case 'new':
-                      store.newRequest();
-                      _tabs.animateTo(0);
-                    case 'saveas':
-                      _save(forceDialog: true);
-                    case 'curl-in':
-                      _importCurl();
-                    case 'curl-out':
-                      _copyCurl();
-                    case 'rename':
-                      _rename();
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'new', child: ListTile(leading: Icon(Icons.add), title: Text('New request'))),
-                  PopupMenuItem(value: 'saveas', child: ListTile(leading: Icon(Icons.save_as_outlined), title: Text('Save as…'))),
-                  PopupMenuItem(value: 'rename', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename'))),
-                  PopupMenuDivider(),
-                  PopupMenuItem(value: 'curl-in', child: ListTile(leading: Icon(Icons.download_outlined), title: Text('Import cURL'))),
-                  PopupMenuItem(value: 'curl-out', child: ListTile(leading: Icon(Icons.terminal), title: Text('Copy as cURL'))),
-                ],
-              ),
+              NavIconButton(tooltip: 'Save', icon: CupertinoIcons.tray_arrow_down, onPressed: _save),
+              NavIconButton(tooltip: 'More', icon: CupertinoIcons.ellipsis_circle, onPressed: _menu),
             ],
           ),
           body: Column(children: [
             _UrlBar(key: ValueKey('url-$v'), store: store, onSend: _send),
-            TabBar(
-              controller: _tabs,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              tabs: [
-                Tab(text: activeParams > 0 ? 'Params $activeParams' : 'Params'),
-                Tab(text: activeHeaders > 0 ? 'Headers $activeHeaders' : 'Headers'),
-                Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Text('Auth'),
-                  if (r.authType != AuthType.none) ...[
-                    const SizedBox(width: 4),
-                    const Icon(Icons.lock, size: 13, color: AppColors.accent),
-                  ],
-                ])),
-                Tab(text: r.bodyType == BodyType.none ? 'Body' : 'Body · ${_bodyLabel(r.bodyType)}'),
-                Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Text('Response'),
-                  if (store.sending) ...[
-                    const SizedBox(width: 6),
-                    const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
-                  ] else if (res != null) ...[
-                    const SizedBox(width: 6),
-                    Text(res.isError ? 'ERR' : '${res.statusCode}',
-                        style: TextStyle(color: statusColor(res.statusCode), fontWeight: FontWeight.w700)),
-                  ],
-                ])),
-              ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: IosSegmented<int>(
+                value: _tabs.index,
+                onChanged: _tabs.animateTo,
+                segments: {
+                  0: count('Params', activeParams),
+                  1: count('Headers', activeHeaders),
+                  2: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Text('Auth'),
+                    if (r.authType != AuthType.none) ...[
+                      const SizedBox(width: 3),
+                      Icon(CupertinoIcons.lock_fill, size: 11, color: c.accent),
+                    ],
+                  ]),
+                  3: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Text('Body'),
+                    if (r.bodyType != BodyType.none) ...[
+                      const SizedBox(width: 4),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(color: c.accent, shape: BoxShape.circle),
+                      ),
+                    ],
+                  ]),
+                  4: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (store.sending) ...[
+                      const CupertinoActivityIndicator(radius: 6),
+                      const SizedBox(width: 4),
+                    ] else if (res != null) ...[
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(color: c.status(res.statusCode), shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                    const Text('Response'),
+                  ]),
+                },
+              ),
             ),
             Expanded(
               child: TabBarView(controller: _tabs, children: [
@@ -243,15 +278,13 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
 
   Widget _responseTab(ResponseData? res) {
     if (res == null && store.sending) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: CupertinoActivityIndicator(radius: 14));
     }
     if (res == null) {
-      return const Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.send_outlined, size: 40, color: AppColors.muted),
-          SizedBox(height: 12),
-          Text('Hit Send to see the response', style: TextStyle(color: AppColors.muted)),
-        ]),
+      return const EmptyState(
+        icon: CupertinoIcons.paperplane,
+        title: 'No response yet',
+        message: 'Hit Send to see the response',
       );
     }
     // Keep the view mounted while re-sending so the JSONPath filter survives.
@@ -260,14 +293,6 @@ class _RequestScreenState extends State<RequestScreen> with SingleTickerProvider
       Expanded(child: ResponseView(store: store, response: res)),
     ]);
   }
-
-  static String _bodyLabel(BodyType t) => switch (t) {
-        BodyType.json => 'JSON',
-        BodyType.text => 'Text',
-        BodyType.form => 'Form',
-        BodyType.graphql => 'GraphQL',
-        BodyType.none => 'None',
-      };
 }
 
 // ================================================================ URL bar
@@ -290,8 +315,20 @@ class _UrlBarState extends State<_UrlBar> {
     super.dispose();
   }
 
+  Future<void> _pickMethod() async {
+    final colors = AppColors.of(context);
+    final store = widget.store;
+    final m = await showActionSheet<String>(context, title: 'Method', actions: [
+      for (final m in httpMethods) SheetAction(m, m, color: colors.method(m)),
+    ]);
+    if (m == null) return;
+    store.current.method = m;
+    store.changed();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     final store = widget.store;
     final r = store.current;
     final vars = store.variables;
@@ -300,38 +337,30 @@ class _UrlBarState extends State<_UrlBar> {
         [r.url, ...r.params.map((p) => p.value), ...r.headers.map((h) => h.value), r.body, r.bearerToken]
             .join(' '),
         vars);
+    final mc = c.method(r.method);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          PopupMenuButton<String>(
-            initialValue: r.method,
-            onSelected: (m) {
-              r.method = m;
-              store.changed();
-            },
-            itemBuilder: (_) => [
-              for (final m in httpMethods)
-                PopupMenuItem(
-                  value: m,
-                  child: Text(m,
-                      style: TextStyle(color: methodColor(m), fontWeight: FontWeight.w700, fontFamily: mono)),
-                ),
-            ],
-            child: Container(
-              height: 46,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: methodColor(r.method).withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(10),
+          Semantics(
+            button: true,
+            label: 'Method ${r.method}',
+            excludeSemantics: true,
+            child: InkWell(
+              onTap: _pickMethod,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(color: mc.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(12)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(r.method,
+                      style: TextStyle(color: mc, fontWeight: FontWeight.w800, fontFamily: mono, fontSize: 13)),
+                  const SizedBox(width: 2),
+                  Icon(CupertinoIcons.chevron_up_chevron_down, color: mc, size: 14),
+                ]),
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text(r.method,
-                    style: TextStyle(
-                        color: methodColor(r.method), fontWeight: FontWeight.w800, fontFamily: mono, fontSize: 13)),
-                Icon(Icons.arrow_drop_down, color: methodColor(r.method), size: 20),
-              ]),
             ),
           ),
           const SizedBox(width: 8),
@@ -344,9 +373,10 @@ class _UrlBarState extends State<_UrlBar> {
               autocorrect: false,
               enableSuggestions: false,
               style: const TextStyle(fontFamily: mono, fontSize: 13.5),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: '{{baseUrl}}/users',
-                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                fillColor: c.surface,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 15),
               ),
               onChanged: (t) {
                 r.url = t;
@@ -357,33 +387,31 @@ class _UrlBarState extends State<_UrlBar> {
           ),
           const SizedBox(width: 8),
           SizedBox(
-            height: 46,
+            height: 48,
+            width: 48,
             child: FilledButton(
               style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: EdgeInsets.zero,
+                backgroundColor: store.sending ? c.danger : c.accent,
+                shape: const CircleBorder(),
               ),
               onPressed: store.sending ? store.cancelSend : widget.onSend,
               child: store.sending
-                  ? const Icon(Icons.stop_rounded, size: 22, semanticLabel: 'Cancel request')
-                  : const Icon(Icons.send_rounded, size: 20, semanticLabel: 'Send'),
+                  ? const Icon(CupertinoIcons.stop_fill, size: 20, semanticLabel: 'Cancel request')
+                  : const Icon(CupertinoIcons.arrow_up, size: 22, semanticLabel: 'Send'),
             ),
           ),
         ]),
         if (hasVars || missing.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 6, left: 2),
+            padding: const EdgeInsets.only(top: 6, left: 4),
             child: Text(
               missing.isNotEmpty
                   ? 'Undefined: ${missing.map((m) => '{{$m}}').join(', ')}'
                   : '→ ${HttpService.subst(r.url, vars)}',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: mono,
-                fontSize: 11.5,
-                color: missing.isNotEmpty ? AppColors.warning : AppColors.muted,
-              ),
+              style: TextStyle(fontFamily: mono, fontSize: 11.5, color: missing.isNotEmpty ? c.warning : c.muted),
             ),
           ),
       ]),
@@ -406,86 +434,108 @@ class _AuthEditorState extends State<_AuthEditor> {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     final store = widget.store;
     final r = store.current;
 
-    Widget field(String label, String initial, ValueChanged<String> onChanged,
-        {bool secret = false, String? hint}) {
+    Widget field(String label, String initial, ValueChanged<String> onChanged, {bool secret = false, String? hint}) {
       return Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: TextFormField(
-          key: ValueKey('auth-field-$label'),
-          initialValue: initial,
-          obscureText: secret && _obscure,
-          autocorrect: false,
-          enableSuggestions: false,
-          style: const TextStyle(fontFamily: mono, fontSize: 13.5),
-          decoration: InputDecoration(
-            labelText: label,
-            hintText: hint,
-            suffixIcon: secret
-                ? IconButton(
-                    icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined, size: 20),
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                  )
-                : null,
-          ),
-          onChanged: (t) {
-            onChanged(t);
-            store.changed();
-          },
-        ),
-      );
-    }
-
-    return ListView(padding: const EdgeInsets.all(16), children: [
-      DropdownButtonFormField<AuthType>(
-        initialValue: r.authType,
-        decoration: const InputDecoration(labelText: 'Type'),
-        items: const [
-          DropdownMenuItem(value: AuthType.none, child: Text('No auth')),
-          DropdownMenuItem(value: AuthType.bearer, child: Text('Bearer token')),
-          DropdownMenuItem(value: AuthType.apiKey, child: Text('API key')),
-          DropdownMenuItem(value: AuthType.basic, child: Text('Basic auth')),
-        ],
-        onChanged: (t) {
-          r.authType = t ?? AuthType.none;
-          store.changed();
-        },
-      ),
-      const SizedBox(height: 16),
-      ...switch (r.authType) {
-        AuthType.none => [
-            const Text('This request does not use authorization.', style: TextStyle(color: AppColors.muted)),
-          ],
-        AuthType.bearer => [
-            field('Token', r.bearerToken, (t) => r.bearerToken = t, secret: true, hint: '{{token}}'),
-            const Text('Sent as  Authorization: Bearer <token>',
-                style: TextStyle(color: AppColors.muted, fontFamily: mono, fontSize: 12)),
-          ],
-        AuthType.apiKey => [
-            field('Key name', r.apiKeyName, (t) => r.apiKeyName = t, hint: 'X-API-Key'),
-            field('Value', r.apiKeyValue, (t) => r.apiKeyValue = t, secret: true, hint: '{{apiKey}}'),
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: false, label: Text('Header'), icon: Icon(Icons.view_headline, size: 18)),
-                ButtonSegment(value: true, label: Text('Query param'), icon: Icon(Icons.link, size: 18)),
-              ],
-              selected: {r.apiKeyInQuery},
-              onSelectionChanged: (s) {
-                r.apiKeyInQuery = s.first;
+        padding: const EdgeInsets.only(left: 16, right: 4),
+        child: Row(children: [
+          SizedBox(width: 92, child: Text(label, style: TextStyle(fontSize: 15, color: c.text))),
+          Expanded(
+            child: TextFormField(
+              key: ValueKey('auth-field-$label'),
+              initialValue: initial,
+              obscureText: secret && _obscure,
+              autocorrect: false,
+              enableSuggestions: false,
+              style: const TextStyle(fontFamily: mono, fontSize: 13.5),
+              decoration: plainInput(
+                hint ?? label,
+                suffix: secret
+                    ? IconButton(
+                        tooltip: _obscure ? 'Show' : 'Hide',
+                        icon: Icon(_obscure ? CupertinoIcons.eye : CupertinoIcons.eye_slash, size: 20, color: c.muted),
+                        onPressed: () => setState(() => _obscure = !_obscure),
+                      )
+                    : null,
+              ),
+              onChanged: (t) {
+                onChanged(t);
                 store.changed();
               },
             ),
+          ),
+        ]),
+      );
+    }
+
+    return ListView(padding: const EdgeInsets.only(top: 8, bottom: 24), children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: IosSegmented<AuthType>(
+          value: r.authType,
+          segments: const {
+            AuthType.none: Text('None'),
+            AuthType.bearer: Text('Bearer'),
+            AuthType.apiKey: Text('API Key'),
+            AuthType.basic: Text('Basic'),
+          },
+          onChanged: (t) {
+            r.authType = t;
+            store.changed();
+          },
+        ),
+      ),
+      ...switch (r.authType) {
+        AuthType.none => [
+            const EmptyState(
+              icon: CupertinoIcons.lock_open,
+              title: 'No auth',
+              message: 'This request does not use authorization.',
+            ),
+          ],
+        AuthType.bearer => [
+            IosSection(
+              footer: 'Sent as  Authorization: Bearer <token>',
+              children: [field('Token', r.bearerToken, (t) => r.bearerToken = t, secret: true, hint: '{{token}}')],
+            ),
+          ],
+        AuthType.apiKey => [
+            IosSection(children: [
+              field('Key name', r.apiKeyName, (t) => r.apiKeyName = t, hint: 'X-API-Key'),
+              field('Value', r.apiKeyValue, (t) => r.apiKeyValue = t, secret: true, hint: '{{apiKey}}'),
+            ]),
+            IosSection(
+              header: 'Add to',
+              children: [
+                for (final inQuery in [false, true])
+                  IosTile(
+                    title: Text(inQuery ? 'Query parameter' : 'Header'),
+                    trailing: r.apiKeyInQuery == inQuery
+                        ? Icon(CupertinoIcons.checkmark_alt, color: c.accent, size: 22)
+                        : null,
+                    onTap: () {
+                      r.apiKeyInQuery = inQuery;
+                      store.changed();
+                    },
+                  ),
+              ],
+            ),
           ],
         AuthType.basic => [
-            field('Username', r.basicUser, (t) => r.basicUser = t),
-            field('Password', r.basicPass, (t) => r.basicPass = t, secret: true),
+            IosSection(children: [
+              field('Username', r.basicUser, (t) => r.basicUser = t),
+              field('Password', r.basicPass, (t) => r.basicPass = t, secret: true),
+            ]),
           ],
       },
-      const SizedBox(height: 20),
-      const Text('Tip: store secrets in an environment and reference them as {{name}}.',
-          style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Text('Tip: store secrets in an environment and reference them as {{name}}.',
+            style: TextStyle(color: c.muted, fontSize: 12.5)),
+      ),
     ]);
   }
 }
@@ -554,6 +604,13 @@ class _BodyEditorState extends State<_BodyEditor> {
     store.changed();
   }
 
+  Future<void> _pickType() async {
+    final t = await showActionSheet<BodyType>(context, title: 'Body type', actions: [
+      for (final t in BodyType.values) SheetAction(_bodyLabel(t), t),
+    ]);
+    if (t != null) _setType(t);
+  }
+
   Future<void> _loadSchema() async {
     final r = store.current.copy()
       ..bodyType = BodyType.graphql
@@ -589,53 +646,57 @@ class _BodyEditorState extends State<_BodyEditor> {
     }
   }
 
+  Widget _label(String text, {Widget? trailing, Color? color}) {
+    final c = AppColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 4, 4),
+      child: Row(children: [
+        Expanded(
+          child: Text(color == null ? text.toUpperCase() : text,
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: color ?? c.muted)),
+        ),
+        ?trailing,
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     final r = store.current;
-    return ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 32), children: [
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(children: [
-          for (final t in BodyType.values)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: ChoiceChip(
-                label: Text(_RequestScreenState._bodyLabel(t)),
-                selected: r.bodyType == t,
-                onSelected: (_) => _setType(t),
-              ),
-            ),
-        ]),
+    return ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
+      IosSection(
+        margin: const EdgeInsets.only(bottom: 12),
+        children: [
+          IosTile(
+            title: const Text('Body type'),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(_bodyLabel(r.bodyType), style: TextStyle(color: c.muted, fontSize: 15)),
+              const SizedBox(width: 4),
+              Icon(CupertinoIcons.chevron_up_chevron_down, size: 14, color: c.muted),
+            ]),
+            onTap: _pickType,
+          ),
+        ],
       ),
-      const SizedBox(height: 12),
       ...switch (r.bodyType) {
         BodyType.none => [
-            const Padding(
-              padding: EdgeInsets.only(top: 24),
-              child: Center(child: Text('This request has no body', style: TextStyle(color: AppColors.muted))),
-            ),
+            const EmptyState(icon: CupertinoIcons.doc, title: 'No body', message: 'This request has no body'),
           ],
         BodyType.json || BodyType.text => [
             if (r.bodyType == BodyType.json)
-              Row(children: [
-                Builder(builder: (_) {
-                  final err = _jsonError(r.body);
-                  return Expanded(
-                    child: Text(
-                      err == null ? '✓ Valid JSON' : '✗ $err',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 12, color: err == null ? const Color(0xFF4ADE80) : const Color(0xFFF87171)),
-                    ),
-                  );
-                }),
-                TextButton.icon(
-                  onPressed: () => _beautify(_body, (s) => r.body = s),
-                  icon: const Icon(Icons.auto_fix_high, size: 16),
-                  label: const Text('Beautify'),
-                ),
-              ]),
+              Builder(builder: (_) {
+                final err = _jsonError(r.body);
+                return _label(
+                  err == null ? '✓ Valid JSON' : '✗ $err',
+                  color: err == null ? c.success : c.danger,
+                  trailing: TextButton.icon(
+                    onPressed: () => _beautify(_body, (s) => r.body = s),
+                    icon: const Icon(CupertinoIcons.wand_stars, size: 16),
+                    label: const Text('Beautify'),
+                  ),
+                );
+              }),
             CodeField(
               initial: r.body,
               controller: _body,
@@ -651,20 +712,16 @@ class _BodyEditorState extends State<_BodyEditor> {
             KeyValueEditor(items: r.formBody, onChanged: store.changed, keyHint: 'Field', shrinkWrap: true),
           ],
         BodyType.graphql => [
-            Row(children: [
-              const Text('Query', style: TextStyle(fontWeight: FontWeight.w600)),
-              const Spacer(),
-              _loadingSchema
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                    )
+            _label(
+              'Query',
+              trailing: _loadingSchema
+                  ? const Padding(padding: EdgeInsets.all(12), child: CupertinoActivityIndicator())
                   : TextButton.icon(
                       onPressed: _loadSchema,
-                      icon: const Icon(Icons.account_tree_outlined, size: 16),
+                      icon: const Icon(CupertinoIcons.list_bullet_indent, size: 16),
                       label: const Text('Schema'),
                     ),
-            ]),
+            ),
             CodeField(
               initial: r.gqlQuery,
               controller: _gql,
@@ -675,16 +732,15 @@ class _BodyEditorState extends State<_BodyEditor> {
                 store.changed(notify: false);
               },
             ),
-            const SizedBox(height: 14),
-            Row(children: [
-              const Text('Variables (JSON)', style: TextStyle(fontWeight: FontWeight.w600)),
-              const Spacer(),
-              TextButton.icon(
+            const SizedBox(height: 8),
+            _label(
+              'Variables (JSON)',
+              trailing: TextButton.icon(
                 onPressed: () => _beautify(_gqlVars, (s) => r.gqlVariables = s),
-                icon: const Icon(Icons.auto_fix_high, size: 16),
+                icon: const Icon(CupertinoIcons.wand_stars, size: 16),
                 label: const Text('Beautify'),
               ),
-            ]),
+            ),
             CodeField(
               initial: r.gqlVariables,
               controller: _gqlVars,
@@ -701,22 +757,21 @@ class _BodyEditorState extends State<_BodyEditor> {
   }
 }
 
-// ============================================================ save dialog
+// ============================================================== save page
 
-/// Asks for a request name and a target collection. A null collectionId
-/// means "create a new collection".
-class _SaveDialog extends StatefulWidget {
+/// Modal page asking for a request name and a target collection. Pops with
+/// the choice; a null collectionId means "create a new collection".
+class _SavePage extends StatefulWidget {
   final AppStore store;
-  const _SaveDialog({required this.store});
+  const _SavePage({required this.store});
 
   @override
-  State<_SaveDialog> createState() => _SaveDialogState();
+  State<_SavePage> createState() => _SavePageState();
 }
 
-class _SaveDialogState extends State<_SaveDialog> {
-  static const _newCol = '__new__';
+class _SavePageState extends State<_SavePage> {
   late final TextEditingController _name = TextEditingController(text: widget.store.current.name);
-  late String _colId = widget.store.collections.firstOrNull?.id ?? _newCol;
+  late String? _colId = widget.store.collections.firstOrNull?.id;
 
   @override
   void dispose() {
@@ -726,29 +781,43 @@ class _SaveDialogState extends State<_SaveDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Save request'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: _name, decoration: const InputDecoration(labelText: 'Request name')),
-        const SizedBox(height: 14),
-        DropdownButtonFormField<String>(
-          initialValue: _colId,
-          decoration: const InputDecoration(labelText: 'Collection'),
-          items: [
-            for (final c in widget.store.collections) DropdownMenuItem(value: c.id, child: Text(c.name)),
-            const DropdownMenuItem(value: _newCol, child: Text('+ New collection…')),
-          ],
-          onChanged: (v) => setState(() => _colId = v ?? _newCol),
-        ),
+    final c = AppColors.of(context);
+    Widget check(bool on) => on ? Icon(CupertinoIcons.checkmark_alt, color: c.accent, size: 22) : const SizedBox();
+    return Scaffold(
+      appBar: AppBar(
+        leadingWidth: 88,
+        leading: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        title: const Text('Save request'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, (name: _name.text, collectionId: _colId)),
+            child: const Text('Save', style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+      body: ListView(padding: const EdgeInsets.only(top: 16), children: [
+        IosSection(header: 'Name', children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(controller: _name, autofocus: true, decoration: plainInput('Request name')),
+          ),
+        ]),
+        IosSection(header: 'Collection', children: [
+          for (final col in widget.store.collections)
+            IosTile(
+              leading: Icon(CupertinoIcons.folder, color: c.accent),
+              title: Text(col.name),
+              trailing: check(_colId == col.id),
+              onTap: () => setState(() => _colId = col.id),
+            ),
+          IosTile(
+            leading: Icon(CupertinoIcons.folder_badge_plus, color: c.accent),
+            title: Text('New collection…', style: TextStyle(color: c.accent)),
+            trailing: check(_colId == null),
+            onTap: () => setState(() => _colId = null),
+          ),
+        ]),
       ]),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: () =>
-              Navigator.pop(context, (name: _name.text, collectionId: _colId == _newCol ? null : _colId)),
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 }
@@ -759,41 +828,42 @@ class _EnvChip extends StatelessWidget {
   final AppStore store;
   const _EnvChip({required this.store});
 
+  Future<void> _pick(BuildContext context) async {
+    const none = '__none__';
+    final id = await showActionSheet<String>(context, title: 'Environment', actions: [
+      SheetAction('No environment', none, icon: store.activeEnvId == null ? CupertinoIcons.checkmark_alt : null),
+      for (final e in store.environments)
+        SheetAction(e.name, e.id, icon: e.id == store.activeEnvId ? CupertinoIcons.checkmark_alt : null),
+    ]);
+    if (id != null) store.setActiveEnv(id == none ? null : id);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     final env = store.activeEnv;
-    return PopupMenuButton<String>(
-      tooltip: 'Environment',
-      onSelected: (id) => store.setActiveEnv(id == '__none__' ? null : id),
-      itemBuilder: (_) => [
-        const PopupMenuItem(value: '__none__', child: Text('No environment')),
-        for (final e in store.environments)
-          PopupMenuItem(
-            value: e.id,
-            child: Row(children: [
-              Icon(e.id == store.activeEnvId ? Icons.radio_button_checked : Icons.radio_button_off,
-                  size: 18, color: AppColors.accent),
-              const SizedBox(width: 10),
-              Flexible(child: Text(e.name, overflow: TextOverflow.ellipsis)),
-            ]),
+    return Tooltip(
+      message: 'Environment',
+      child: InkWell(
+        onTap: () => _pick(context),
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          margin: const EdgeInsets.only(left: 12, top: 10, bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: env == null ? c.surface2 : c.accent.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(20),
           ),
-      ],
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 120),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          border: Border.all(color: env == null ? AppColors.border : AppColors.accent.withValues(alpha: 0.5)),
-          borderRadius: BorderRadius.circular(20),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(CupertinoIcons.globe, size: 15, color: env == null ? c.muted : c.accent),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(env?.name ?? 'No env',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12.5, color: env == null ? c.muted : c.accent, fontWeight: FontWeight.w600)),
+            ),
+          ]),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.public, size: 15, color: env == null ? AppColors.muted : AppColors.accent),
-          const SizedBox(width: 5),
-          Flexible(
-            child: Text(env?.name ?? 'No env',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12.5, color: env == null ? AppColors.muted : AppColors.text)),
-          ),
-        ]),
       ),
     );
   }

@@ -1,17 +1,18 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme.dart';
 
-const _base = TextStyle(fontFamily: mono, fontSize: 12.5, height: 1.45, color: AppColors.text);
+TextStyle _base(AppColors c) => TextStyle(fontFamily: mono, fontSize: 12.5, height: 1.45, color: c.text);
 
 /// Builds syntax-highlighted spans for pretty-printed JSON.
 class JsonHighlighter {
   static const int maxChars = 400000;
 
-  static TextSpan build(dynamic value) {
+  static TextSpan build(dynamic value, AppColors c) {
     final spans = <TextSpan>[];
     var count = 0;
     void add(String t, Color c) {
@@ -24,44 +25,43 @@ class JsonHighlighter {
       final pad = '  ' * (indent + 1);
       final close = '  ' * indent;
       if (v is Map) {
-        if (v.isEmpty) return add('{}', AppColors.jPunct);
-        add('{\n', AppColors.jPunct);
+        if (v.isEmpty) return add('{}', c.jPunct);
+        add('{\n', c.jPunct);
         var i = 0;
         for (final e in v.entries) {
-          add(pad, AppColors.jPunct);
-          add(jsonEncode(e.key.toString()), AppColors.jKey);
-          add(': ', AppColors.jPunct);
+          add(pad, c.jPunct);
+          add(jsonEncode(e.key.toString()), c.jKey);
+          add(': ', c.jPunct);
           walk(e.value, indent + 1);
-          add(++i < v.length ? ',\n' : '\n', AppColors.jPunct);
+          add(++i < v.length ? ',\n' : '\n', c.jPunct);
         }
-        add('$close}', AppColors.jPunct);
+        add('$close}', c.jPunct);
       } else if (v is List) {
-        if (v.isEmpty) return add('[]', AppColors.jPunct);
-        add('[\n', AppColors.jPunct);
+        if (v.isEmpty) return add('[]', c.jPunct);
+        add('[\n', c.jPunct);
         for (var i = 0; i < v.length; i++) {
-          add(pad, AppColors.jPunct);
+          add(pad, c.jPunct);
           walk(v[i], indent + 1);
-          add(i < v.length - 1 ? ',\n' : '\n', AppColors.jPunct);
+          add(i < v.length - 1 ? ',\n' : '\n', c.jPunct);
         }
-        add('$close]', AppColors.jPunct);
+        add('$close]', c.jPunct);
       } else if (v is String) {
-        add(jsonEncode(v), AppColors.jString);
+        add(jsonEncode(v), c.jString);
       } else if (v is num) {
-        add(v.toString(), AppColors.jNumber);
+        add(v.toString(), c.jNumber);
       } else if (v is bool) {
-        add(v.toString(), AppColors.jBool);
+        add(v.toString(), c.jBool);
       } else {
-        add('null', AppColors.jNull);
+        add('null', c.jNull);
       }
     }
 
     walk(value, 0);
     if (count > maxChars) {
-      spans.add(const TextSpan(
-          text: '\n\n… truncated (use Raw view or JSONPath to see more)',
-          style: TextStyle(color: AppColors.muted)));
+      spans.add(TextSpan(
+          text: '\n\n… truncated (use Raw view or JSONPath to see more)', style: TextStyle(color: c.muted)));
     }
-    return TextSpan(style: _base, children: spans);
+    return TextSpan(style: _base(c), children: spans);
   }
 }
 
@@ -73,7 +73,7 @@ class JsonText extends StatelessWidget {
   Widget build(BuildContext context) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      child: SelectableText.rich(JsonHighlighter.build(value)),
+      child: SelectableText.rich(JsonHighlighter.build(value, AppColors.of(context))),
     );
   }
 }
@@ -142,16 +142,17 @@ class _JsonNodeState extends State<_JsonNode> {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     final v = widget.value;
     final isContainer = v is Map || v is List;
     final indent = EdgeInsets.only(left: widget.depth * 14.0);
 
     if (!isContainer) {
       final (text, color) = switch (v) {
-        String s => (jsonEncode(s), AppColors.jString),
-        num n => (n.toString(), AppColors.jNumber),
-        bool b => (b.toString(), AppColors.jBool),
-        _ => ('null', AppColors.jNull),
+        String s => (jsonEncode(s), c.jString),
+        num n => (n.toString(), c.jNumber),
+        bool b => (b.toString(), c.jBool),
+        _ => ('null', c.jNull),
       };
       return InkWell(
         onTap: () => _copy(v is String ? v : text, 'value'),
@@ -159,9 +160,9 @@ class _JsonNodeState extends State<_JsonNode> {
         child: Padding(
           padding: indent.add(const EdgeInsets.symmetric(vertical: 3, horizontal: 4)),
           child: Text.rich(
-            TextSpan(style: _base, children: [
-              const WidgetSpan(child: SizedBox(width: 18)),
-              TextSpan(text: '${widget.name}: ', style: const TextStyle(color: AppColors.jKey)),
+            TextSpan(style: _base(c), children: [
+              const WidgetSpan(child: SizedBox(width: 14)),
+              TextSpan(text: '${widget.name}: ', style: TextStyle(color: c.jKey)),
               TextSpan(text: text, style: TextStyle(color: color)),
             ]),
             maxLines: 4,
@@ -185,12 +186,12 @@ class _JsonNodeState extends State<_JsonNode> {
           child: Padding(
             padding: indent.add(const EdgeInsets.symmetric(vertical: 3, horizontal: 4)),
             child: Row(children: [
-              Icon(open ? Icons.expand_more : Icons.chevron_right, size: 18, color: AppColors.muted),
+              Icon(open ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right, size: 14, color: c.muted),
               Flexible(
                 child: Text.rich(
-                  TextSpan(style: _base, children: [
-                    TextSpan(text: widget.name, style: const TextStyle(color: AppColors.jKey)),
-                    TextSpan(text: '  $summary', style: const TextStyle(color: AppColors.muted)),
+                  TextSpan(style: _base(c), children: [
+                    TextSpan(text: widget.name, style: TextStyle(color: c.jKey)),
+                    TextSpan(text: '  $summary', style: TextStyle(color: c.muted)),
                   ]),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -211,7 +212,7 @@ class _JsonNodeState extends State<_JsonNode> {
           Padding(
             padding: indent.add(const EdgeInsets.fromLTRB(36, 4, 4, 4)),
             child: Text('… ${entries.length - _maxChildren} more (use JSONPath slices)',
-                style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                style: TextStyle(color: c.muted, fontSize: 12)),
           ),
       ],
     );

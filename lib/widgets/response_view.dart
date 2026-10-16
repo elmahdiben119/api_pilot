@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import 'dialogs.dart';
+import 'ios.dart';
 import 'json_view.dart';
 
 /// Classic 16-bytes-per-line hex dump with an ASCII column.
@@ -178,25 +180,23 @@ class _ResponseViewState extends State<ResponseView> {
       children: [
         _statusBar(res),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-          child: SegmentedButton<_View>(
-            showSelectedIcon: false,
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: [
-              ButtonSegment(value: _View.pretty, label: Text(res.binary ? 'Preview' : 'Pretty')),
-              if (_isJson) const ButtonSegment(value: _View.tree, label: Text('Tree')),
-              if (!res.binary) const ButtonSegment(value: _View.raw, label: Text('Raw')),
-              ButtonSegment(value: _View.headers, label: Text('Headers ${res.headers.length}')),
-            ],
-            selected: {view},
-            onSelectionChanged: (s) => setState(() => view = s.first),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: IosSegmented<_View>(
+            value: view,
+            segments: {
+              _View.pretty: Text(res.binary ? 'Preview' : 'Pretty'),
+              if (_isJson) _View.tree: const Text('Tree'),
+              if (!res.binary) _View.raw: const Text('Raw'),
+              _View.headers: Text('Headers ${res.headers.length}'),
+            },
+            onChanged: (v) => setState(() => view = v),
           ),
         ),
         if (_isJson && view != _View.headers) _pathBar(),
         const Divider(),
         Expanded(
           child: _parsing && view != _View.headers && view != _View.raw
-              ? const Center(child: CircularProgressIndicator())
+              ? const Center(child: CupertinoActivityIndicator())
               : _body(res),
         ),
       ],
@@ -204,53 +204,54 @@ class _ResponseViewState extends State<ResponseView> {
   }
 
   Widget _statusBar(ResponseData res) {
-    final c = statusColor(res.statusCode);
+    final c = AppColors.of(context);
+    final sc = c.status(res.statusCode);
+    final meta = TextStyle(color: c.muted, fontSize: 12.5);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 4, 8),
+      padding: const EdgeInsets.fromLTRB(16, 10, 4, 8),
       child: Row(children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: c.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(6),
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(color: sc.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(20)),
           child: Text('${res.statusCode} ${res.reason}'.trim(),
-              style: TextStyle(color: c, fontWeight: FontWeight.w700, fontFamily: mono, fontSize: 13)),
+              style: TextStyle(color: sc, fontWeight: FontWeight.w700, fontFamily: mono, fontSize: 13)),
         ),
         const SizedBox(width: 10),
-        const Icon(Icons.timer_outlined, size: 15, color: AppColors.muted),
+        Icon(CupertinoIcons.timer, size: 14, color: c.muted),
         const SizedBox(width: 3),
-        Text('${res.durationMs} ms', style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+        Text('${res.durationMs} ms', style: meta),
         const SizedBox(width: 10),
-        const Icon(Icons.data_object, size: 15, color: AppColors.muted),
+        Icon(CupertinoIcons.doc, size: 14, color: c.muted),
         const SizedBox(width: 3),
-        Text(formatBytes(res.sizeBytes), style: const TextStyle(color: AppColors.muted, fontSize: 12.5)),
+        Text(formatBytes(res.sizeBytes), style: meta),
         if (res.truncated)
-          const Tooltip(
+          Tooltip(
             message: 'Only the first part of the body is shown',
-            child: Text(' · truncated', style: TextStyle(color: AppColors.warning, fontSize: 12.5)),
+            child: Text(' · truncated', style: TextStyle(color: c.warning, fontSize: 12.5)),
           ),
         const Spacer(),
-        if (!res.binary || view == _View.headers) IconButton(
-          tooltip: 'Copy',
-          icon: const Icon(Icons.copy_all_outlined, size: 20),
-          onPressed: () {
-            Clipboard.setData(ClipboardData(
-                text: view == _View.headers
-                    ? res.headers.entries.map((e) => '${e.key}: ${e.value}').join('\n')
-                    : _shownText));
-            _toast('Copied to clipboard');
-          },
-        ),
+        if (!res.binary || view == _View.headers)
+          IconButton(
+            tooltip: 'Copy',
+            icon: Icon(CupertinoIcons.doc_on_doc, size: 20, color: c.accent),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(
+                  text: view == _View.headers
+                      ? res.headers.entries.map((e) => '${e.key}: ${e.value}').join('\n')
+                      : _shownText));
+              _toast('Copied to clipboard');
+            },
+          ),
       ]),
     );
   }
 
   Widget _pathBar() {
+    final c = AppColors.of(context);
     final r = _results;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-      child: Row(children: [
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(
           child: TextField(
             controller: _path,
@@ -259,14 +260,15 @@ class _ResponseViewState extends State<ResponseView> {
             enableSuggestions: false,
             decoration: InputDecoration(
               hintText: r'JSONPath  e.g. $.data[*].id',
-              prefixIcon: const Icon(Icons.filter_alt_outlined, size: 18),
+              prefixIcon: Icon(CupertinoIcons.line_horizontal_3_decrease, size: 18, color: c.muted),
               prefixIconConstraints: const BoxConstraints(minWidth: 36),
               errorText: _pathError,
               errorMaxLines: 2,
               suffixIcon: _path.text.isEmpty
                   ? null
                   : IconButton(
-                      icon: const Icon(Icons.close, size: 18),
+                      tooltip: 'Clear filter',
+                      icon: Icon(CupertinoIcons.xmark_circle_fill, size: 18, color: c.muted),
                       onPressed: () {
                         _path.clear();
                         _runPath();
@@ -280,7 +282,7 @@ class _ResponseViewState extends State<ResponseView> {
         if (r != null && r.isNotEmpty)
           IconButton(
             tooltip: 'Save first match to a variable',
-            icon: const Icon(Icons.bookmark_add_outlined),
+            icon: Icon(CupertinoIcons.bookmark, color: c.accent),
             onPressed: _saveToVariable,
           ),
       ]),
@@ -288,26 +290,26 @@ class _ResponseViewState extends State<ResponseView> {
   }
 
   Widget _body(ResponseData res) {
+    final c = AppColors.of(context);
+    const code = TextStyle(fontFamily: mono, fontSize: 12.5, height: 1.4);
     switch (view) {
       case _View.headers:
-        return ListView.separated(
-          padding: const EdgeInsets.all(12),
-          itemCount: res.headers.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (_, i) {
-            final e = res.headers.entries.elementAt(i);
-            return SelectableText.rich(TextSpan(
-              style: const TextStyle(fontFamily: mono, fontSize: 12.5),
-              children: [
-                TextSpan(text: '${e.key}: ', style: const TextStyle(color: AppColors.jKey)),
-                TextSpan(text: e.value),
-              ],
-            ));
-          },
-        );
+        return ListView(padding: const EdgeInsets.only(top: 12), children: [
+          IosSection(children: [
+            for (final e in res.headers.entries)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(e.key, style: TextStyle(fontSize: 12, color: c.muted)),
+                  const SizedBox(height: 2),
+                  SelectableText(e.value, style: const TextStyle(fontFamily: mono, fontSize: 13)),
+                ]),
+              ),
+          ]),
+        ]);
       case _View.tree:
         return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(4, 8, 8, 24),
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
           child: JsonTree(
             _shown,
             key: ValueKey(_path.text),
@@ -323,42 +325,36 @@ class _ResponseViewState extends State<ResponseView> {
       case _View.raw:
         final text = _results != null ? _shownText : res.body;
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(12),
-          child: SelectableText(
-            text.isEmpty ? '(empty body)' : text,
-            style: const TextStyle(fontFamily: mono, fontSize: 12.5, height: 1.4),
-          ),
+          padding: const EdgeInsets.all(16),
+          child: SelectableText(text.isEmpty ? '(empty body)' : text, style: code),
         );
       case _View.pretty:
         if (res.binary) return _binaryView(res);
         if (_isJson) {
           return SingleChildScrollView(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(16),
             child: JsonText(_shown),
           );
         }
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(12),
-          child: SelectableText(
-            res.body.isEmpty ? '(empty body)' : res.body,
-            style: const TextStyle(fontFamily: mono, fontSize: 12.5, height: 1.4),
-          ),
+          padding: const EdgeInsets.all(16),
+          child: SelectableText(res.body.isEmpty ? '(empty body)' : res.body, style: code),
         );
     }
   }
 
   Widget _binaryView(ResponseData res) {
+    final c = AppColors.of(context);
+    final muted = TextStyle(color: c.muted, fontSize: 12.5);
     final bytes = res.bytes;
     final type = res.contentType ?? 'unknown type';
-    final info = Text('Binary response · $type · ${formatBytes(res.sizeBytes)}',
-        style: const TextStyle(color: AppColors.muted, fontSize: 12.5));
+    final info = Text('Binary response · $type · ${formatBytes(res.sizeBytes)}', style: muted);
     if (bytes == null) {
       // Loaded from history: the bytes aren't stored.
       return ListView(padding: const EdgeInsets.all(16), children: [
         info,
         const SizedBox(height: 8),
-        const Text('Binary bodies are not kept in history. Send the request again to see it.',
-            style: TextStyle(color: AppColors.muted, fontSize: 12.5)),
+        Text('Binary bodies are not kept in history. Send the request again to see it.', style: muted),
       ]);
     }
     final isImage = type.toLowerCase().startsWith('image/');
@@ -366,12 +362,14 @@ class _ResponseViewState extends State<ResponseView> {
       info,
       const SizedBox(height: 12),
       if (isImage && !res.truncated)
-        Image.memory(
-          bytes,
-          fit: BoxFit.contain,
-          semanticLabel: 'Response image',
-          errorBuilder: (_, __, ___) =>
-              const Text('Could not decode this image.', style: TextStyle(color: AppColors.muted)),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.memory(
+            bytes,
+            fit: BoxFit.contain,
+            semanticLabel: 'Response image',
+            errorBuilder: (_, __, ___) => Text('Could not decode this image.', style: TextStyle(color: c.muted)),
+          ),
         )
       else ...[
         const Text('First bytes (hex)', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -385,6 +383,7 @@ class _ResponseViewState extends State<ResponseView> {
   }
 
   Widget _errorView(ResponseData res) {
+    final c = AppColors.of(context);
     final msg = res.error!;
     String? hint;
     final lower = msg.toLowerCase();
@@ -394,23 +393,23 @@ class _ResponseViewState extends State<ResponseView> {
     } else if (lower.contains('handshake') || lower.contains('certificate')) {
       hint = 'TLS/certificate problem. Self-signed certificates are not trusted by default.';
     } else if (lower.contains('timed out')) {
-      hint = 'You can raise the timeout in Settings (Env tab → ⚙).';
+      hint = 'You can raise the timeout in Settings (Env tab → gear).';
     }
-    return ListView(padding: const EdgeInsets.all(16), children: [
-      Row(children: [
-        const Icon(Icons.error_outline, color: Color(0xFFF87171)),
-        const SizedBox(width: 8),
-        const Text('Request failed', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-        const Spacer(),
-        if (res.durationMs > 0)
-          Text('${res.durationMs} ms', style: const TextStyle(color: AppColors.muted)),
-      ]),
-      const SizedBox(height: 12),
-      SelectableText(msg, style: const TextStyle(fontFamily: mono, fontSize: 12.5)),
-      if (hint != null) ...[
-        const SizedBox(height: 16),
-        Text(hint, style: const TextStyle(color: AppColors.muted)),
-      ],
+    return ListView(padding: const EdgeInsets.symmetric(vertical: 16), children: [
+      IosSection(
+        footer: hint,
+        children: [
+          IosTile(
+            leading: IosIconBox(CupertinoIcons.exclamationmark, c.danger),
+            title: const Text('Request failed', style: TextStyle(fontWeight: FontWeight.w600)),
+            trailing: res.durationMs > 0 ? Text('${res.durationMs} ms', style: TextStyle(color: c.muted)) : null,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SelectableText(msg, style: const TextStyle(fontFamily: mono, fontSize: 12.5)),
+          ),
+        ],
+      ),
     ]);
   }
 }

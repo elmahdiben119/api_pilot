@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'screens/collections_screen.dart';
@@ -23,7 +24,9 @@ class ApiPilotApp extends StatelessWidget {
     return MaterialApp(
       title: 'API Pilot',
       debugShowCheckedModeBanner: false,
-      theme: buildTheme(),
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
+      themeMode: ThemeMode.system,
       home: HomeShell(store: store),
     );
   }
@@ -65,17 +68,27 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
+    final c = AppColors.of(context);
     return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: Column(children: [
-          if (store.storageError != null)
-            MaterialBanner(
-              leading: const Icon(Icons.warning_amber_rounded, color: AppColors.warning),
-              content: Text(store.storageError!),
-              actions: const [SizedBox.shrink()],
+      body: Column(children: [
+        if (store.storageError != null)
+          SafeArea(
+            bottom: false,
+            child: Container(
+              width: double.infinity,
+              color: c.warning.withValues(alpha: 0.15),
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Row(children: [
+                Icon(CupertinoIcons.exclamationmark_triangle_fill, color: c.warning, size: 20),
+                const SizedBox(width: 10),
+                Expanded(child: Text(store.storageError!, style: TextStyle(color: c.text, fontSize: 13))),
+              ]),
             ),
-          Expanded(
+          ),
+        Expanded(
+          child: MediaQuery.removePadding(
+            context: context,
+            removeTop: store.storageError != null,
             child: IndexedStack(index: _tab, children: [
               RequestScreen(store: store),
               CollectionsScreen(store: store, onOpen: _openRequestTab),
@@ -83,20 +96,28 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               EnvironmentsScreen(store: store),
             ]),
           ),
-        ]),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) {
+        ),
+      ]),
+      bottomNavigationBar: CupertinoTabBar(
+        currentIndex: _tab,
+        backgroundColor: c.bar,
+        activeColor: c.accent,
+        inactiveColor: c.muted,
+        height: 54,
+        border: Border(top: BorderSide(color: c.border, width: 0)),
+        onTap: (i) {
           FocusScope.of(context).unfocus();
           setState(() => _tab = i);
         },
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.send_outlined), selectedIcon: Icon(Icons.send), label: 'Request'),
-          NavigationDestination(
-              icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: 'Collections'),
-          NavigationDestination(icon: Icon(Icons.history), label: 'History'),
-          NavigationDestination(icon: Icon(Icons.public_outlined), selectedIcon: Icon(Icons.public), label: 'Env'),
+        items: const [
+          BottomNavigationBarItem(
+              icon: Icon(CupertinoIcons.paperplane), activeIcon: Icon(CupertinoIcons.paperplane_fill), label: 'Request'),
+          BottomNavigationBarItem(
+              icon: Icon(CupertinoIcons.folder), activeIcon: Icon(CupertinoIcons.folder_fill), label: 'Collections'),
+          BottomNavigationBarItem(
+              icon: Icon(CupertinoIcons.clock), activeIcon: Icon(CupertinoIcons.clock_fill), label: 'History'),
+          BottomNavigationBarItem(
+              icon: Icon(CupertinoIcons.globe), label: 'Env'),
         ],
       ),
     );

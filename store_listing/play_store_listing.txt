@@ -1,0 +1,51 @@
+Language: English (United States) – en-US
+
+TITLE (max 30)
+API Pilot: REST & GraphQL
+
+SHORT DESCRIPTION (max 80)
+Test REST & GraphQL APIs on your phone. Private, on-device, no account.
+
+FULL DESCRIPTION (max 4000)
+API Pilot is a fast, private API client for Android. Build, send and debug REST and GraphQL requests right from your phone, with no account and no cloud.
+
+REST AND GRAPHQL
+• All common methods: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
+• Query parameters and headers with one-tap common presets
+• JSON, plain text, form URL-encoded and GraphQL bodies, with JSON validation and Beautify
+• GraphQL schema explorer: load the schema from your endpoint and generate a query in one tap
+
+AUTHENTICATION
+• Bearer token, API key (header or query parameter) and Basic auth
+• Keep secrets in environments and reference them as {{token}}
+
+ENVIRONMENTS AND VARIABLES
+• Switch between Production, Staging and Local in one tap
+• Use {{variables}} in URLs, params, headers, auth and bodies
+• Built-in dynamic values: {{$timestamp}}, {{$isoTimestamp}}, {{$uuid}}, {{$randomInt}}
+• See the resolved URL and any undefined variable before you send
+
+READ RESPONSES EASILY
+• Status, time and size at a glance
+• Pretty JSON with syntax highlighting, a collapsible tree view, raw text and headers
+• Filter any JSON response with JSONPath, then save a value (like a login token) straight into your environment
+• Image preview and hex view for binary responses
+• Cancel slow requests and set your own timeout
+
+COLLECTIONS AND HISTORY
+• Save requests into collections and reorder them with drag and drop
+• Import Postman collections (v2.0 and v2.1) and Postman environments
+• Import a request from cURL, or copy any request as cURL
+• Searchable history of the requests you sent, filtered by method, with their responses
+
+PRIVATE BY DESIGN
+• Everything stays on your device: no account, no sign-up, no analytics, no ads
+• Collections, environments and history are stored encrypted on the device
+• You can turn history off at any time
+• Credentials are never forwarded when a redirect goes to another site
+
+A CLEAN, MODERN DESIGN
+• Light and dark themes that follow your system setting
+• Designed for one-handed use on the go
+
+Perfect for mobile and backend developers, QA testers and anyone who works with APIs: test an endpoint from the couch, check a webhook on the train, or debug your local server over Wi-Fi.

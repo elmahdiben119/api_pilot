@@ -1,9 +1,11 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
-import 'collections_screen.dart' show MethodBadge;
+import '../widgets/dialogs.dart';
+import '../widgets/ios.dart';
 
 class HistoryScreen extends StatefulWidget {
   final AppStore store;
@@ -29,122 +31,167 @@ class _HistoryScreenState extends State<HistoryScreen> {
             (h.response.statusCode?.toString() ?? '').startsWith(q);
       }).toList();
 
+  /// Groups entries (newest first) under "Today", "Yesterday" or a date.
+  static List<(String, List<HistoryEntry>)> _byDay(List<HistoryEntry> items) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    String label(DateTime t) {
+      final d = today.difference(DateTime(t.year, t.month, t.day)).inDays;
+      if (d <= 0) return 'Today';
+      if (d == 1) return 'Yesterday';
+      return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+    }
+
+    final out = <(String, List<HistoryEntry>)>[];
+    for (final h in items) {
+      final l = label(h.time);
+      if (out.isEmpty || out.last.$1 != l) out.add((l, []));
+      out.last.$2.add(h);
+    }
+    return out;
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) {
+        final c = AppColors.of(context);
         final items = _filtered;
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('History'),
-            actions: [
-              if (store.history.isNotEmpty)
-                IconButton(
-                  tooltip: 'Clear history',
-                  icon: const Icon(Icons.delete_sweep_outlined),
-                  onPressed: () async {
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        content: const Text('Clear all history?'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear')),
-                        ],
-                      ),
-                    );
-                    if (ok == true) store.clearHistory();
-                  },
+        return LargeTitlePage(
+          title: 'History',
+          actions: [
+            if (store.history.isNotEmpty)
+              NavIconButton(
+                tooltip: 'Clear history',
+                icon: CupertinoIcons.trash,
+                onPressed: () async {
+                  if (await confirm(context, 'Clear all history?', action: 'Clear')) store.clearHistory();
+                },
+              ),
+          ],
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: CupertinoSearchTextField(
+                  placeholder: 'Search URL, name or status',
+                  style: TextStyle(color: c.text),
+                  onChanged: (t) => setState(() => _q = t.trim()),
                 ),
-            ],
-          ),
-          body: Column(children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              child: TextField(
-                decoration: const InputDecoration(
-                  hintText: 'Search URL, name or status',
-                  prefixIcon: Icon(Icons.search, size: 20),
-                ),
-                onChanged: (t) => setState(() => _q = t.trim()),
               ),
             ),
-            SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  for (final m in [null, ...httpMethods.take(5)])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        visualDensity: VisualDensity.compact,
-                        label: Text(m ?? 'All',
-                            style: TextStyle(color: m == null ? null : methodColor(m), fontSize: 12)),
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: 48,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  children: [
+                    for (final m in [null, ...httpMethods.take(5)])
+                      _FilterCapsule(
+                        label: m ?? 'All',
+                        color: m == null ? c.accent : c.method(m),
                         selected: _method == m,
-                        onSelected: (_) => setState(() => _method = m),
+                        onTap: () => setState(() => _method = m),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 4),
-            Expanded(
-              child: items.isEmpty
-                  ? const Center(
-                      child: Text('No requests yet', style: TextStyle(color: AppColors.muted)),
-                    )
-                  : ListView.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(indent: 16, endIndent: 16),
-                      itemBuilder: (context, i) {
-                        final h = items[i];
-                        final res = h.response;
-                        return Dismissible(
-                          key: ValueKey(h.id),
-                          direction: DismissDirection.endToStart,
-                          background: Container(
-                            alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.only(right: 20),
-                            color: const Color(0x33F87171),
-                            child: const Icon(Icons.delete_outline),
-                          ),
-                          onDismissed: (_) => store.deleteHistory(h),
-                          child: ListTile(
-                            leading: MethodBadge(h.request.method),
-                            title: Text(h.request.url, maxLines: 2, overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontFamily: mono, fontSize: 12.5)),
-                            subtitle: Text(
-                              '${timeAgo(h.time)} · ${res.durationMs} ms'
-                              '${res.isError ? '' : ' · ${formatBytes(res.sizeBytes)}'}',
-                              style: const TextStyle(fontSize: 11.5, color: AppColors.muted),
-                            ),
-                            trailing: Text(
-                              res.isError ? 'ERR' : '${res.statusCode}',
-                              style: TextStyle(
-                                color: statusColor(res.statusCode),
-                                fontWeight: FontWeight.w700,
-                                fontFamily: mono,
-                              ),
-                            ),
-                            onTap: () {
-                              // Re-link to the collection the request came from, if it still exists.
-                              final col = store.collections
-                                  .where((c) => c.requests.any((r) => r.id == h.request.id))
-                                  .firstOrNull;
-                              store.openRequest(h.request, collectionId: col?.id, withResponse: res);
-                              widget.onOpen();
-                            },
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ]),
+            if (items.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: EmptyState(
+                  icon: CupertinoIcons.clock,
+                  title: 'No requests yet',
+                  message: store.history.isEmpty ? 'Requests you send appear here.' : 'Nothing matches the filter.',
+                ),
+              )
+            else
+              SliverList.list(children: [
+                for (final (day, entries) in _byDay(items))
+                  IosSection(
+                    header: day,
+                    dividerIndent: 80,
+                    children: [for (final h in entries) _entry(context, h)],
+                  ),
+              ]),
+          ],
         );
       },
+    );
+  }
+
+  Widget _entry(BuildContext context, HistoryEntry h) {
+    final c = AppColors.of(context);
+    final res = h.response;
+    return Dismissible(
+      key: ValueKey(h.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        color: c.danger,
+        child: Icon(CupertinoIcons.trash, color: c.onTint),
+      ),
+      onDismissed: (_) => store.deleteHistory(h),
+      child: IosTile(
+        leading: MethodBadge(h.request.method),
+        title: Text(h.request.url,
+            maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontFamily: mono, fontSize: 13)),
+        subtitle: Text('${timeAgo(h.time)} · ${res.durationMs} ms'
+            '${res.isError ? '' : ' · ${formatBytes(res.sizeBytes)}'}'),
+        trailing: Text(
+          res.isError ? 'ERR' : '${res.statusCode}',
+          style: TextStyle(color: c.status(res.statusCode), fontWeight: FontWeight.w700, fontFamily: mono),
+        ),
+        chevron: true,
+        onTap: () {
+          // Re-link to the collection the request came from, if it still exists.
+          final col = store.collections.where((c) => c.requests.any((r) => r.id == h.request.id)).firstOrNull;
+          store.openRequest(h.request, collectionId: col?.id, withResponse: res);
+          widget.onOpen();
+        },
+      ),
+    );
+  }
+}
+
+class _FilterCapsule extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+  const _FilterCapsule({required this.label, required this.color, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Semantics(
+        button: true,
+        selected: selected,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? color : c.surface,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? c.onTint : (label == 'All' ? c.text : color))),
+          ),
+        ),
+      ),
     );
   }
 }

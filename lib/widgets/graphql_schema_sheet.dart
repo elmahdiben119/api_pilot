@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../graphql_schema.dart';
@@ -18,6 +19,7 @@ class _GraphQLSchemaSheetState extends State<GraphQLSchemaSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final c = AppColors.of(context);
     final s = widget.schema;
     final groups = <(String, String, List<GqlField>)>[
       if (s.queryType != null) ('Query', 'query', s.rootFields(s.queryType)),
@@ -35,14 +37,14 @@ class _GraphQLSchemaSheetState extends State<GraphQLSchemaSheet> {
           Container(
             width: 36,
             height: 4,
-            decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)),
+            decoration: BoxDecoration(color: c.muted.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(2)),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: TextField(
               decoration: const InputDecoration(
                 hintText: 'Search fields',
-                prefixIcon: Icon(Icons.search, size: 20),
+                prefixIcon: Icon(CupertinoIcons.search, size: 18),
               ),
               onChanged: (t) => setState(() => _filter = t.toLowerCase()),
             ),
@@ -69,16 +71,16 @@ class _GraphQLSchemaSheetState extends State<GraphQLSchemaSheet> {
                               title: Text.rich(TextSpan(
                                 style: const TextStyle(fontFamily: mono, fontSize: 13.5),
                                 children: [
-                                  TextSpan(text: f.name, style: const TextStyle(color: AppColors.jKey)),
+                                  TextSpan(text: f.name, style: TextStyle(color: c.jKey)),
                                   if (args.isNotEmpty)
-                                    TextSpan(text: '($args)', style: const TextStyle(color: AppColors.muted)),
-                                  TextSpan(text: ': ${f.typeString}', style: const TextStyle(color: AppColors.jString)),
+                                    TextSpan(text: '($args)', style: TextStyle(color: c.muted)),
+                                  TextSpan(text: ': ${f.typeString}', style: TextStyle(color: c.jString)),
                                 ],
                               )),
                               subtitle: f.description == null || f.description!.isEmpty
                                   ? null
                                   : Text(f.description!, maxLines: 2, overflow: TextOverflow.ellipsis),
-                              trailing: const Icon(Icons.north_west, size: 18),
+                              trailing: Icon(CupertinoIcons.arrow_up_left, size: 16, color: c.accent),
                               onTap: () => Navigator.pop(context, s.skeleton(f, g.$2)),
                             );
                           },

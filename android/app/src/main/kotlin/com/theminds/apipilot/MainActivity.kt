@@ -1,4 +1,4 @@
-package dev.apipilot.api_pilot
+package com.theminds.apipilot
 
 import io.flutter.embedding.android.FlutterActivity
 

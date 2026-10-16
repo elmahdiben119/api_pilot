@@ -1,0 +1,15 @@
+# Launcher icons. Regenerate with: dart run flutter_launcher_icons
+# Source artwork and how to edit it: assets/branding/README.md
+flutter_launcher_icons:
+  android: true
+  ios: false # the project has no iOS platform
+  min_sdk_android: 24
+  # Legacy icon (Android 7.x) and fallback: full icon with background.
+  image_path: "assets/branding/icon-1024.png"
+  # Adaptive icon (Android 8+). The foreground already keeps the glyph inside
+  # the 66dp safe zone, so no extra inset is added.
+  adaptive_icon_background: "#0F2A52" # keep in sync with BACKGROUND in tool/branding/render.mjs
+  adaptive_icon_foreground: "assets/branding/icon-foreground-1024.png"
+  adaptive_icon_foreground_inset: 0
+  # Themed icon (Android 13+).
+  adaptive_icon_monochrome: "assets/branding/icon-monochrome-1024.png"
